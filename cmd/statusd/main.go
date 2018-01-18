@@ -33,6 +33,23 @@ var (
 	logLevel       = flag.String("log", "INFO", `Log level, one of: "ERROR", "WARN", "INFO", "DEBUG", and "TRACE"`)
 	logFile        = flag.String("logfile", "", "Path to the log file")
 	version        = flag.Bool("version", false, "Print version")
+	lesEnabled     = flag.Bool("les", true, "LES protocol enabled")
+
+	listenAddr = flag.String("listenaddr", ":30303", "IP address and port of this node (e.g. 127.0.0.1:30303)")
+	standalone = flag.Bool("standalone", true, "Don't actively connect to peers, wait for incoming connections")
+
+	// shh stuff
+	identityFile = flag.String("shh.identityfile", "", "Protocol identity file (private key used for asymmetric encryption)")
+	passwordFile = flag.String("shh.passwordfile", "", "Password file (password is used for symmetric encryption)")
+	minPow       = flag.Float64("shh.pow", params.WhisperMinimumPoW, "PoW for messages to be added to queue, in float format")
+	ttl          = flag.Int("shh.ttl", params.WhisperTTL, "Time to live for messages, in seconds")
+
+	// MailServer
+	enableMailServer = flag.Bool("shh.mailserver", false, "Delivers expired messages on demand")
+
+	// Push Notification
+	enablePN     = flag.Bool("shh.notify", false, "Node is capable of sending Push Notifications")
+	firebaseAuth = flag.String("shh.firebaseauth", "", "FCM Authorization Key used for sending Push Notifications")
 )
 
 func main() {
@@ -106,17 +123,23 @@ func makeNodeConfig() (*params.NodeConfig, error) {
 		nodeConfig.LogFile = *logFile
 	}
 
-	nodeConfig.LightEthConfig.Enabled = true
 	nodeConfig.RPCEnabled = *httpEnabled
 	nodeConfig.WhisperConfig.Enabled = *whisperEnabled
+
+	nodeConfig.HTTPPort = *httpPort
+	nodeConfig.IPCEnabled = *ipcEnabled
+
+	nodeConfig.LightEthConfig.Enabled = *lesEnabled
 	nodeConfig.SwarmConfig.Enabled = *swarmEnabled
+
+	if *whisperEnabled {
+		return whisperConfig(nodeConfig)
+	}
 
 	// RPC configuration
 	if !*httpEnabled {
 		nodeConfig.HTTPHost = "" // HTTP RPC is disabled
 	}
-	nodeConfig.HTTPPort = *httpPort
-	nodeConfig.IPCEnabled = *ipcEnabled
 
 	return nodeConfig, nil
 }
@@ -147,8 +170,8 @@ func printVersion(config *params.NodeConfig, gitCommit, buildStamp string) {
 }
 
 func printUsage() {
-	fmt.Fprintln(os.Stderr, "Usage: statusd [options]")
-	fmt.Fprintf(os.Stderr, `
+	usage := `
+Usage: statusd [options]
 Examples:
   statusd               # run status node with defaults
   statusd -networkid 4  # run node on Rinkeby network
@@ -157,6 +180,7 @@ Examples:
   statusd -cli          # enable connection by statusd-cli on default port
 
 Options:
-`)
+`
+	fmt.Fprintf(os.Stderr, usage) // nolint: gas
 	flag.PrintDefaults()
 }

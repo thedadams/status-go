@@ -160,7 +160,7 @@ func (c *WhisperConfig) ReadIdentityFile() (*ecdsa.PrivateKey, error) {
 
 // String dumps config object as nicely indented JSON
 func (c *WhisperConfig) String() string {
-	data, _ := json.MarshalIndent(c, "", "    ")
+	data, _ := json.MarshalIndent(c, "", "    ") // nolint: gas
 	return string(data)
 }
 
@@ -172,7 +172,7 @@ type SwarmConfig struct {
 
 // String dumps config object as nicely indented JSON
 func (c *SwarmConfig) String() string {
-	data, _ := json.MarshalIndent(c, "", "    ")
+	data, _ := json.MarshalIndent(c, "", "    ") // nolint: gas
 	return string(data)
 }
 
@@ -183,12 +183,6 @@ type BootClusterConfig struct {
 	// Enabled flag specifies whether feature is enabled
 	Enabled bool
 
-	// RootNumber CHT root number
-	RootNumber int
-
-	// RootHash is hash of CHT root for a given root number
-	RootHash string
-
 	// BootNodes list of bootstrap nodes for a given network (Ropsten, Rinkeby, Homestead),
 	// for a given mode (production vs development)
 	BootNodes []string
@@ -196,7 +190,7 @@ type BootClusterConfig struct {
 
 // String dumps config object as nicely indented JSON
 func (c *BootClusterConfig) String() string {
-	data, _ := json.MarshalIndent(c, "", "    ")
+	data, _ := json.MarshalIndent(c, "", "    ") // nolint: gas
 	return string(data)
 }
 
@@ -288,8 +282,8 @@ type NodeConfig struct {
 	// LogFile is filename where exposed logs get written to
 	LogFile string
 
-	// LogLevel defines minimum log level. Valid names are "ERROR", "WARNING", "INFO", "DEBUG", and "TRACE".
-	LogLevel string `validate:"eq=ERROR|eq=WARNING|eq=INFO|eq=DEBUG|eq=TRACE"`
+	// LogLevel defines minimum log level. Valid names are "ERROR", "WARN", "INFO", "DEBUG", and "TRACE".
+	LogLevel string `validate:"eq=ERROR|eq=WARN|eq=INFO|eq=DEBUG|eq=TRACE"`
 
 	// LogToStderr defines whether logged info should also be output to os.Stderr
 	LogToStderr bool
@@ -588,12 +582,8 @@ func (c *NodeConfig) updateBootClusterConfig() error {
 
 	for _, cluster := range clusters {
 		if cluster.NetworkID == int(c.NetworkID) {
-			c.BootClusterConfig.RootNumber = cluster.Prod.Number
-			c.BootClusterConfig.RootHash = cluster.Prod.Hash
 			c.BootClusterConfig.BootNodes = cluster.Prod.BootNodes
 			if c.DevMode {
-				c.BootClusterConfig.RootNumber = cluster.Dev.Number
-				c.BootClusterConfig.RootHash = cluster.Dev.Hash
 				c.BootClusterConfig.BootNodes = cluster.Dev.BootNodes
 			}
 			break
