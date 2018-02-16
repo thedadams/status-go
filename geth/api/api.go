@@ -9,6 +9,7 @@ import (
 	"github.com/status-im/status-go/geth/common"
 	"github.com/status-im/status-go/geth/log"
 	"github.com/status-im/status-go/geth/params"
+	"github.com/status-im/status-go/geth/transactions"
 )
 
 // StatusAPI provides API to access Status related functionality.
@@ -45,71 +46,51 @@ func (api *StatusAPI) JailManager() common.JailManager {
 }
 
 // TxQueueManager returns reference to account manager
-func (api *StatusAPI) TxQueueManager() common.TxQueueManager {
+func (api *StatusAPI) TxQueueManager() *transactions.Manager {
 	return api.b.TxQueueManager()
 }
 
 // StartNode start Status node, fails if node is already started
 func (api *StatusAPI) StartNode(config *params.NodeConfig) error {
-	nodeStarted, err := api.b.StartNode(config)
-	if err != nil {
-		return err
-	}
-	<-nodeStarted
-	return nil
+	return api.b.StartNode(config)
 }
 
 // StartNodeAsync start Status node, fails if node is already started
 // Returns immediately w/o waiting for node to start (see node.ready)
-func (api *StatusAPI) StartNodeAsync(config *params.NodeConfig) (<-chan struct{}, error) {
-	return api.b.StartNode(config)
+func (api *StatusAPI) StartNodeAsync(config *params.NodeConfig) <-chan error {
+	return runAsync(func() error { return api.StartNode(config) })
 }
 
 // StopNode stop Status node. Stopped node cannot be resumed.
 func (api *StatusAPI) StopNode() error {
-	nodeStopped, err := api.b.StopNode()
-	if err != nil {
-		return err
-	}
-	<-nodeStopped
-	return nil
+	return api.b.StopNode()
 }
 
 // StopNodeAsync stop Status node. Stopped node cannot be resumed.
 // Returns immediately, w/o waiting for node to stop (see node.stopped)
-func (api *StatusAPI) StopNodeAsync() (<-chan struct{}, error) {
-	return api.b.StopNode()
+func (api *StatusAPI) StopNodeAsync() <-chan error {
+	return runAsync(api.StopNode)
 }
 
 // RestartNode restart running Status node, fails if node is not running
 func (api *StatusAPI) RestartNode() error {
-	nodeStarted, err := api.b.RestartNode()
-	if err != nil {
-		return err
-	}
-	<-nodeStarted // do not return up until backend is ready
-	return nil
+	return api.b.RestartNode()
 }
 
 // RestartNodeAsync restart running Status node, in async manner
-func (api *StatusAPI) RestartNodeAsync() (<-chan struct{}, error) {
-	return api.b.RestartNode()
+func (api *StatusAPI) RestartNodeAsync() <-chan error {
+	return runAsync(api.RestartNode)
 }
 
 // ResetChainData remove chain data from data directory.
 // Node is stopped, and new node is started, with clean data directory.
 func (api *StatusAPI) ResetChainData() error {
-	nodeStarted, err := api.b.ResetChainData()
-	if err != nil {
-		return err
-	}
-	<-nodeStarted // do not return up until backend is ready
-	return nil
+	return api.b.ResetChainData()
 }
 
 // ResetChainDataAsync remove chain data from data directory, in async manner
-func (api *StatusAPI) ResetChainDataAsync() (<-chan struct{}, error) {
-	return api.b.ResetChainData()
+func (api *StatusAPI) ResetChainDataAsync() <-chan error {
+	return runAsync(api.ResetChainData)
 }
 
 // CallRPC executes RPC request on node's in-proc RPC server
@@ -171,7 +152,7 @@ func (api *StatusAPI) CompleteTransaction(id common.QueuedTxID, password string)
 }
 
 // CompleteTransactions instructs backend to complete sending of multiple transactions
-func (api *StatusAPI) CompleteTransactions(ids []common.QueuedTxID, password string) map[common.QueuedTxID]common.RawCompleteTransactionResult {
+func (api *StatusAPI) CompleteTransactions(ids []common.QueuedTxID, password string) map[common.QueuedTxID]common.TransactionResult {
 	return api.b.txQueueManager.CompleteTransactions(ids, password)
 }
 

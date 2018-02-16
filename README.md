@@ -14,7 +14,7 @@ It's written in Go and requires Go 1.8 or above.
 
 It uses Makefile to do most common actions. See `make help` output for available commands.
 
-status-go uses [forked ethereum-go](https://github.com/status-im/go-ethereum) with [some patches applied](https://github.com/status-im/status-go/geth-patches/) in it, located under [`vendor/` dir](https://github.com/status-im/status-go/tree/develop/vendor/github.com/ethereum/go-ethereum). See [geth-patches README](https://github.com/status-im/status-go/geth-patches/) for more info.
+status-go uses [go-ethereum](https://github.com/ethereum/go-ethereum) with [some patches applied](./_assets/patches/geth) in it, located under [`vendor/`](./vendor/github.com/ethereum/go-ethereum) directory. See [geth patches README](./_assets/patches/geth/README.md) for more info.
 
 # Build
 There are two main modes status-go can be built:
@@ -36,6 +36,7 @@ Make sure the dependencies are installed first by running:
 make lint-install
 make mock-install
 ```
+
 To test fully statusgo, use:
 ```
 make ci
@@ -50,6 +51,8 @@ To test statusgo using a given network by number ID, use:
 ```
 make ci networkid=3
 ```
+
+If you have problems running tests on public network we suggest reading [e2e guide](t/e2e/README.md).
 
 If you want to launch specific test, for instance `RPCSendTransactions`, use the following command:
 ```
