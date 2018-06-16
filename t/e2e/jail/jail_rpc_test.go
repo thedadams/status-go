@@ -9,13 +9,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/robertkrimen/otto"
+
 	gethcommon "github.com/ethereum/go-ethereum/common"
-	"github.com/status-im/status-go/geth/common"
-	"github.com/status-im/status-go/geth/params"
-	"github.com/status-im/status-go/geth/signal"
-	"github.com/status-im/status-go/geth/transactions"
+
+	"github.com/status-im/status-go/jail"
+	"github.com/status-im/status-go/params"
+	"github.com/status-im/status-go/signal"
 	e2e "github.com/status-im/status-go/t/e2e"
 	. "github.com/status-im/status-go/t/utils"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -26,7 +29,7 @@ func TestJailRPCTestSuite(t *testing.T) {
 type JailRPCTestSuite struct {
 	e2e.BackendTestSuite
 
-	jail common.JailManager
+	jail jail.Manager
 }
 
 func (s *JailRPCTestSuite) SetupTest() {
@@ -36,10 +39,12 @@ func (s *JailRPCTestSuite) SetupTest() {
 }
 
 func (s *JailRPCTestSuite) TestJailRPCSend() {
+	CheckTestSkipForNetworks(s.T(), params.MainNetworkID)
+
 	s.StartTestBackend()
 	defer s.StopTestBackend()
 
-	EnsureNodeSync(s.Backend.NodeManager())
+	EnsureNodeSync(s.Backend.StatusNode().EnsureSync)
 
 	// load Status JS and add test command to it
 	s.jail.SetBaseJS(baseStatusJSCode)
@@ -61,7 +66,7 @@ func (s *JailRPCTestSuite) TestJailRPCSend() {
 	value, err := cell.Get("sendResult")
 	s.NoError(err, "cannot obtain result of balance check operation")
 
-	balance, err := value.ToFloat()
+	balance, err := value.Value().ToFloat()
 	s.NoError(err)
 
 	s.T().Logf("Balance of %.2f ETH found on '%s' account", balance, TestConfig.Account1.Address)
@@ -87,17 +92,17 @@ func (s *JailRPCTestSuite) TestIsConnected() {
 	responseValue, err := cell.Get("responseValue")
 	s.NoError(err, "cannot obtain result of isConnected()")
 
-	response, err := responseValue.ToBoolean()
+	response, err := responseValue.Value().ToBoolean()
 	s.NoError(err, "cannot parse result")
 	s.True(response)
 }
 
-// regression test: eth_getTransactionReceipt with invalid transaction hash should return null
+// regression test: eth_getTransactionReceipt with invalid transaction hash should return "result":null.
 func (s *JailRPCTestSuite) TestRegressionGetTransactionReceipt() {
 	s.StartTestBackend()
 	defer s.StopTestBackend()
 
-	rpcClient := s.Backend.NodeManager().RPCClient()
+	rpcClient := s.Backend.StatusNode().RPCClient()
 	s.NotNil(rpcClient)
 
 	// note: transaction hash is assumed to be invalid
@@ -105,12 +110,34 @@ func (s *JailRPCTestSuite) TestRegressionGetTransactionReceipt() {
 	expected := `{"jsonrpc":"2.0","id":7,"result":null}`
 	s.Equal(expected, got)
 }
+func (s *JailRPCTestSuite) TestContractDeploymentLES() {
+	s.testContractDeployment(false)
+}
+func (s *JailRPCTestSuite) TestContractDeploymentRPC() {
+	s.testContractDeployment(true)
+}
 
-func (s *JailRPCTestSuite) TestContractDeployment() {
-	s.StartTestBackend()
+func (s *JailRPCTestSuite) testContractDeployment(upstream bool) {
+	CheckTestSkipForNetworks(s.T(), params.MainNetworkID)
+	if upstream && GetNetworkID() == params.StatusChainNetworkID {
+		// only testing RPC on rinkeby
+		s.T().Skip()
+	}
+
+	testContractMining := true
+	if GetNetworkID() == params.StatusChainNetworkID {
+		// we don't do mining on our chain
+		testContractMining = false
+	}
+
+	s.StartTestBackend(setUpstreamOption(s.T(), upstream))
 	defer s.StopTestBackend()
 
-	EnsureNodeSync(s.Backend.NodeManager())
+	s.NoError(s.Backend.SelectAccount(TestConfig.Account1.Address, TestConfig.Account1.Password))
+
+	if !upstream {
+		EnsureNodeSync(s.Backend.StatusNode().EnsureSync)
+	}
 
 	// obtain VM for a given chat (to send custom JS to jailed version of Send())
 	s.jail.CreateAndInitCell(testChatID)
@@ -126,17 +153,15 @@ func (s *JailRPCTestSuite) TestContractDeployment() {
 		unmarshalErr := json.Unmarshal([]byte(jsonEvent), &envelope)
 		s.NoError(unmarshalErr, "cannot unmarshal JSON: %s", jsonEvent)
 
-		if envelope.Type == transactions.EventTransactionQueued {
+		if envelope.Type == signal.EventSignRequestAdded {
 			event := envelope.Event.(map[string]interface{})
 			s.T().Logf("transaction queued and will be completed shortly, id: %v", event["id"])
 
-			s.NoError(s.Backend.AccountManager().SelectAccount(TestConfig.Account1.Address, TestConfig.Account1.Password))
-
 			txID := event["id"].(string)
-			var txErr error
-			txHash, txErr = s.Backend.CompleteTransaction(common.QueuedTxID(txID), TestConfig.Account1.Password)
-			if s.NoError(txErr, event["id"]) {
-				s.T().Logf("contract transaction complete, URL: %s", "https://ropsten.etherscan.io/tx/"+txHash.Hex())
+			result := s.Backend.ApproveSignRequest(txID, TestConfig.Account1.Password)
+			txHash.SetBytes(result.Response.Bytes())
+			if s.NoError(result.Error, event["id"]) {
+				s.T().Logf("contract transaction complete, URL: %s", "https://rinkeby.etherscan.io/tx/"+txHash.Hex())
 			}
 
 			close(completeQueuedTransaction)
@@ -146,6 +171,8 @@ func (s *JailRPCTestSuite) TestContractDeployment() {
 	_, err = cell.Run(`
 		var responseValue = null;
 		var errorValue = null;
+		var wasMined = false;
+		var wasSent = false;
 		var testContract = web3.eth.contract([{"constant":true,"inputs":[{"name":"a","type":"int256"}],"name":"double","outputs":[{"name":"","type":"int256"}],"payable":false,"type":"function"}]);
 		var test = testContract.new(
 		{
@@ -161,6 +188,10 @@ func (s *JailRPCTestSuite) TestContractDeployment() {
 			// Once the contract has the transactionHash property set and once its deployed on an address.
 			if (!contract.address) {
 				responseValue = contract.transactionHash;
+				wasSent = true;
+			}
+			if (contract.address) {
+				wasMined = true;
 			}
 		})
 	`)
@@ -172,32 +203,61 @@ func (s *JailRPCTestSuite) TestContractDeployment() {
 		s.FailNow("test timed out")
 	}
 
-	// Wait until callback is fired and `responseValue` is set. Hacky but simple.
-	time.Sleep(5 * time.Second)
+	s.waitForBoolValue(cell, "wasSent", true, 30*time.Second, "timeout while waiting for the contract tx to be sent")
 
 	errorValue, err := cell.Get("errorValue")
 	s.NoError(err)
-	s.Equal("null", errorValue.String())
+	s.Equal("null", errorValue.Value().String())
 
 	responseValue, err := cell.Get("responseValue")
 	s.NoError(err)
 
-	response, err := responseValue.ToString()
+	response, err := responseValue.Value().ToString()
 	s.NoError(err)
 
 	expectedResponse := txHash.Hex()
 	s.Equal(expectedResponse, response)
+
+	if testContractMining {
+		s.waitForBoolValue(cell, "wasMined", true, 3*time.Minute, "timeout while waiting for the contract to be mined")
+	}
+}
+
+func (s *JailRPCTestSuite) waitForBoolValue(cell jail.JSCell, name string, expected bool, timeout time.Duration, msg string) {
+	deadline := time.Now().Add(timeout)
+
+	s.T().Logf("waiting for the variable '%s' to be '%v' with timeout of '%v'", name, expected, timeout)
+
+	for time.Now().Before(deadline) {
+		boolValue, err := cell.Get(name)
+		s.NoError(err)
+		actualValue, err := boolValue.Value().ToBoolean()
+		s.NoError(err)
+		if actualValue == expected {
+			return
+		}
+
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	s.Fail(msg)
 }
 
 func (s *JailRPCTestSuite) TestJailVMPersistence() {
+	CheckTestSkipForNetworks(s.T(), params.MainNetworkID)
+
 	s.StartTestBackend()
 	defer s.StopTestBackend()
 
-	EnsureNodeSync(s.Backend.NodeManager())
+	EnsureNodeSync(s.Backend.StatusNode().EnsureSync)
 
 	// log into account from which transactions will be sent
-	err := s.Backend.AccountManager().SelectAccount(TestConfig.Account1.Address, TestConfig.Account1.Password)
+	err := s.Backend.SelectAccount(TestConfig.Account1.Address, TestConfig.Account1.Password)
 	s.NoError(err, "cannot select account: %v", TestConfig.Account1.Address)
+
+	// there are two `sendTestTx` calls in `testCases`
+	var wgTransctions sync.WaitGroup
+	wgTransctions.Add(2)
 
 	type testCase struct {
 		command   string
@@ -269,6 +329,7 @@ func (s *JailRPCTestSuite) TestJailVMPersistence() {
 		  web3.eth.sendTransaction(transaction, function (error, result) {
 			 if(!error) {
 				total += Number(amount);
+				_done();
 			 }
 		  });
 		}
@@ -277,27 +338,39 @@ func (s *JailRPCTestSuite) TestJailVMPersistence() {
 	`)
 	s.NotContains(parseResult, "error", "further will fail if initial parsing failed")
 
-	var wg sync.WaitGroup
+	cell, err := jail.Cell(testChatID)
+	s.NoError(err)
+
+	// create a bridge between JS code and Go
+	// to notify when the tx callback is called
+	err = cell.Set("_done", func(call otto.FunctionCall) otto.Value {
+		wgTransctions.Done()
+		return otto.UndefinedValue()
+	})
+	s.NoError(err)
+
 	signal.SetDefaultNodeNotificationHandler(func(jsonEvent string) {
 		var envelope signal.Envelope
 		if e := json.Unmarshal([]byte(jsonEvent), &envelope); e != nil {
 			s.T().Errorf("cannot unmarshal event's JSON: %s", jsonEvent)
 			return
 		}
-		if envelope.Type == transactions.EventTransactionQueued {
+		if envelope.Type == signal.EventSignRequestAdded {
 			event := envelope.Event.(map[string]interface{})
 			s.T().Logf("Transaction queued (will be completed shortly): {id: %s}\n", event["id"].(string))
 
-			//var txHash common.Hash
+			var txHash gethcommon.Hash
 			txID := event["id"].(string)
-			txHash, e := s.Backend.CompleteTransaction(common.QueuedTxID(txID), TestConfig.Account1.Password)
-			s.NoError(e, "cannot complete queued transaction[%v]: %v", event["id"], e)
+			result := s.Backend.ApproveSignRequest(txID, TestConfig.Account1.Password)
+			s.NoError(result.Error, "cannot complete queued transaction[%v]: %v", event["id"], result.Error)
 
-			s.T().Logf("Transaction complete: https://ropsten.etherscan.io/tx/%s", txHash.Hex())
+			txHash.SetBytes(result.Response.Bytes())
+			s.T().Logf("Transaction complete: %s", txHash.Hex())
 		}
 	})
 
 	// run commands concurrently
+	var wg sync.WaitGroup
 	for _, tc := range testCases {
 		wg.Add(1)
 		go func(tc testCase) {
@@ -315,6 +388,7 @@ func (s *JailRPCTestSuite) TestJailVMPersistence() {
 	finishTestCases := make(chan struct{})
 	go func() {
 		wg.Wait()
+		wgTransctions.Wait()
 		close(finishTestCases)
 	}()
 
@@ -324,20 +398,24 @@ func (s *JailRPCTestSuite) TestJailVMPersistence() {
 		s.FailNow("some tests failed to finish in time")
 	}
 
-	// Wait till eth_sendTransaction callbacks have been executed.
-	// FIXME(tiabc): more reliable means of testing that.
-	time.Sleep(5 * time.Second)
-
 	// Validate total.
-	cell, err := jail.Cell(testChatID)
-	s.NoError(err)
-
 	totalOtto, err := cell.Get("total")
 	s.NoError(err)
 
-	total, err := totalOtto.ToFloat()
+	total, err := totalOtto.Value().ToFloat()
 	s.NoError(err)
 
 	s.T().Log(total)
 	s.InDelta(0.840003, total, 0.0000001)
+}
+
+func setUpstreamOption(t *testing.T, upstream bool) e2e.TestNodeOption {
+	return func(config *params.NodeConfig) {
+		if upstream {
+			networkURL, err := GetRemoteURL()
+			assert.NoError(t, err)
+			config.UpstreamConfig.Enabled = true
+			config.UpstreamConfig.URL = networkURL
+		}
+	}
 }

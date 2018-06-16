@@ -1,14 +1,20 @@
-package extkeys_test
+package extkeys
 
 import (
 	"bytes"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 
 	"github.com/btcsuite/btcd/chaincfg"
-	"github.com/status-im/status-go/extkeys"
+	"github.com/ethereum/go-ethereum/crypto"
+)
+
+const (
+	masterPrivKey1 = "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi"
+	masterPrivKey2 = "xprv9s21ZrQH143K31xYSDQpPDxsXRTUcvj2iNHm5NUtrGiGG5e2DtALGdso3pGz6ssrdK4PFmM8NSpSBHNqPqm55Qn3LqFtT2emdEXVYsCzC2U"
 )
 
 func TestBIP32Vectors(t *testing.T) {
@@ -25,40 +31,40 @@ func TestBIP32Vectors(t *testing.T) {
 			"000102030405060708090a0b0c0d0e0f",
 			[]uint32{},
 			"xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8",
-			"xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi",
+			masterPrivKey1,
 		},
 		{
 			"test vector 1 chain m/0H",
 			"000102030405060708090a0b0c0d0e0f",
-			[]uint32{extkeys.HardenedKeyStart},
+			[]uint32{HardenedKeyStart},
 			"xpub68Gmy5EdvgibQVfPdqkBBCHxA5htiqg55crXYuXoQRKfDBFA1WEjWgP6LHhwBZeNK1VTsfTFUHCdrfp1bgwQ9xv5ski8PX9rL2dZXvgGDnw",
 			"xprv9uHRZZhk6KAJC1avXpDAp4MDc3sQKNxDiPvvkX8Br5ngLNv1TxvUxt4cV1rGL5hj6KCesnDYUhd7oWgT11eZG7XnxHrnYeSvkzY7d2bhkJ7",
 		},
 		{
 			"test vector 1 chain m/0H/1",
 			"000102030405060708090a0b0c0d0e0f",
-			[]uint32{extkeys.HardenedKeyStart, 1},
+			[]uint32{HardenedKeyStart, 1},
 			"xpub6ASuArnXKPbfEwhqN6e3mwBcDTgzisQN1wXN9BJcM47sSikHjJf3UFHKkNAWbWMiGj7Wf5uMash7SyYq527Hqck2AxYysAA7xmALppuCkwQ",
 			"xprv9wTYmMFdV23N2TdNG573QoEsfRrWKQgWeibmLntzniatZvR9BmLnvSxqu53Kw1UmYPxLgboyZQaXwTCg8MSY3H2EU4pWcQDnRnrVA1xe8fs",
 		},
 		{
 			"test vector 1 chain m/0H/1/2H",
 			"000102030405060708090a0b0c0d0e0f",
-			[]uint32{extkeys.HardenedKeyStart, 1, extkeys.HardenedKeyStart + 2},
+			[]uint32{HardenedKeyStart, 1, HardenedKeyStart + 2},
 			"xpub6D4BDPcP2GT577Vvch3R8wDkScZWzQzMMUm3PWbmWvVJrZwQY4VUNgqFJPMM3No2dFDFGTsxxpG5uJh7n7epu4trkrX7x7DogT5Uv6fcLW5",
 			"xprv9z4pot5VBttmtdRTWfWQmoH1taj2axGVzFqSb8C9xaxKymcFzXBDptWmT7FwuEzG3ryjH4ktypQSAewRiNMjANTtpgP4mLTj34bhnZX7UiM",
 		},
 		{
 			"test vector 1 chain m/0H/1/2H/2",
 			"000102030405060708090a0b0c0d0e0f",
-			[]uint32{extkeys.HardenedKeyStart, 1, extkeys.HardenedKeyStart + 2, 2},
+			[]uint32{HardenedKeyStart, 1, HardenedKeyStart + 2, 2},
 			"xpub6FHa3pjLCk84BayeJxFW2SP4XRrFd1JYnxeLeU8EqN3vDfZmbqBqaGJAyiLjTAwm6ZLRQUMv1ZACTj37sR62cfN7fe5JnJ7dh8zL4fiyLHV",
 			"xprvA2JDeKCSNNZky6uBCviVfJSKyQ1mDYahRjijr5idH2WwLsEd4Hsb2Tyh8RfQMuPh7f7RtyzTtdrbdqqsunu5Mm3wDvUAKRHSC34sJ7in334",
 		},
 		{
 			"test vector 1 chain m/0H/1/2H/2/1000000000",
 			"000102030405060708090a0b0c0d0e0f",
-			[]uint32{extkeys.HardenedKeyStart, 1, extkeys.HardenedKeyStart + 2, 2, 1000000000},
+			[]uint32{HardenedKeyStart, 1, HardenedKeyStart + 2, 2, 1000000000},
 			"xpub6H1LXWLaKsWFhvm6RVpEL9P4KfRZSW7abD2ttkWP3SSQvnyA8FSVqNTEcYFgJS2UaFcxupHiYkro49S8yGasTvXEYBVPamhGW6cFJodrTHy",
 			"xprvA41z7zogVVwxVSgdKUHDy1SKmdb533PjDz7J6N6mV6uS3ze1ai8FHa8kmHScGpWmj4WggLyQjgPie1rFSruoUihUZREPSL39UNdE3BBDu76",
 		},
@@ -68,7 +74,7 @@ func TestBIP32Vectors(t *testing.T) {
 			"fffcf9f6f3f0edeae7e4e1dedbd8d5d2cfccc9c6c3c0bdbab7b4b1aeaba8a5a29f9c999693908d8a8784817e7b7875726f6c696663605d5a5754514e4b484542",
 			[]uint32{},
 			"xpub661MyMwAqRbcFW31YEwpkMuc5THy2PSt5bDMsktWQcFF8syAmRUapSCGu8ED9W6oDMSgv6Zz8idoc4a6mr8BDzTJY47LJhkJ8UB7WEGuduB",
-			"xprv9s21ZrQH143K31xYSDQpPDxsXRTUcvj2iNHm5NUtrGiGG5e2DtALGdso3pGz6ssrdK4PFmM8NSpSBHNqPqm55Qn3LqFtT2emdEXVYsCzC2U",
+			masterPrivKey2,
 		},
 		{
 			"test vector 2 chain m/0",
@@ -80,28 +86,28 @@ func TestBIP32Vectors(t *testing.T) {
 		{
 			"test vector 2 chain m/0/2147483647H",
 			"fffcf9f6f3f0edeae7e4e1dedbd8d5d2cfccc9c6c3c0bdbab7b4b1aeaba8a5a29f9c999693908d8a8784817e7b7875726f6c696663605d5a5754514e4b484542",
-			[]uint32{0, extkeys.HardenedKeyStart + 2147483647},
+			[]uint32{0, HardenedKeyStart + 2147483647},
 			"xpub6ASAVgeehLbnwdqV6UKMHVzgqAG8Gr6riv3Fxxpj8ksbH9ebxaEyBLZ85ySDhKiLDBrQSARLq1uNRts8RuJiHjaDMBU4Zn9h8LZNnBC5y4a",
 			"xprv9wSp6B7kry3Vj9m1zSnLvN3xH8RdsPP1Mh7fAaR7aRLcQMKTR2vidYEeEg2mUCTAwCd6vnxVrcjfy2kRgVsFawNzmjuHc2YmYRmagcEPdU9",
 		},
 		{
 			"test vector 2 chain m/0/2147483647H/1",
 			"fffcf9f6f3f0edeae7e4e1dedbd8d5d2cfccc9c6c3c0bdbab7b4b1aeaba8a5a29f9c999693908d8a8784817e7b7875726f6c696663605d5a5754514e4b484542",
-			[]uint32{0, extkeys.HardenedKeyStart + 2147483647, 1},
+			[]uint32{0, HardenedKeyStart + 2147483647, 1},
 			"xpub6DF8uhdarytz3FWdA8TvFSvvAh8dP3283MY7p2V4SeE2wyWmG5mg5EwVvmdMVCQcoNJxGoWaU9DCWh89LojfZ537wTfunKau47EL2dhHKon",
 			"xprv9zFnWC6h2cLgpmSA46vutJzBcfJ8yaJGg8cX1e5StJh45BBciYTRXSd25UEPVuesF9yog62tGAQtHjXajPPdbRCHuWS6T8XA2ECKADdw4Ef",
 		},
 		{
 			"test vector 2 chain m/0/2147483647H/1/2147483646H",
 			"fffcf9f6f3f0edeae7e4e1dedbd8d5d2cfccc9c6c3c0bdbab7b4b1aeaba8a5a29f9c999693908d8a8784817e7b7875726f6c696663605d5a5754514e4b484542",
-			[]uint32{0, extkeys.HardenedKeyStart + 2147483647, 1, extkeys.HardenedKeyStart + 2147483646},
+			[]uint32{0, HardenedKeyStart + 2147483647, 1, HardenedKeyStart + 2147483646},
 			"xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL",
 			"xprvA1RpRA33e1JQ7ifknakTFpgNXPmW2YvmhqLQYMmrj4xJXXWYpDPS3xz7iAxn8L39njGVyuoseXzU6rcxFLJ8HFsTjSyQbLYnMpCqE2VbFWc",
 		},
 		{
 			"test vector 2 chain m/0/2147483647H/1/2147483646H/2",
 			"fffcf9f6f3f0edeae7e4e1dedbd8d5d2cfccc9c6c3c0bdbab7b4b1aeaba8a5a29f9c999693908d8a8784817e7b7875726f6c696663605d5a5754514e4b484542",
-			[]uint32{0, extkeys.HardenedKeyStart + 2147483647, 1, extkeys.HardenedKeyStart + 2147483646, 2},
+			[]uint32{0, HardenedKeyStart + 2147483647, 1, HardenedKeyStart + 2147483646, 2},
 			"xpub6FnCn6nSzZAw5Tw7cgR9bi15UV96gLZhjDstkXXxvCLsUXBGXPdSnLFbdpq8p9HmGsApME5hQTZ3emM2rnY5agb9rXpVGyy3bdW6EEgAtqt",
 			"xprvA2nrNbFZABcdryreWet9Ea4LvTJcGsqrMzxHx98MMrotbir7yrKCEXw7nadnHM8Dq38EGfSh6dqA9QWTyefMLEcBYJUuekgW4BYPJcr9E7j",
 		},
@@ -115,7 +121,7 @@ tests:
 			continue
 		}
 
-		extKey, err := extkeys.NewMaster(seed, []byte("Bitcoin seed"))
+		extKey, err := NewMaster(seed)
 		if err != nil {
 			t.Errorf("NewMasterKey #%d (%s): %v", i, test.name, err)
 			continue
@@ -175,8 +181,8 @@ func TestChildDerivation(t *testing.T) {
 	// derive public keys from private keys
 	getPrivateChildDerivationTests := func() []testCase {
 		// The private extended keys for test vectors in [BIP32].
-		testVec1MasterPrivKey := "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi"
-		testVec2MasterPrivKey := "xprv9s21ZrQH143K31xYSDQpPDxsXRTUcvj2iNHm5NUtrGiGG5e2DtALGdso3pGz6ssrdK4PFmM8NSpSBHNqPqm55Qn3LqFtT2emdEXVYsCzC2U"
+		testVec1MasterPrivKey := masterPrivKey1
+		testVec2MasterPrivKey := masterPrivKey2
 
 		return []testCase{
 			// Test vector 1
@@ -184,7 +190,7 @@ func TestChildDerivation(t *testing.T) {
 				name:    "test vector 1 chain m",
 				master:  testVec1MasterPrivKey,
 				path:    []uint32{},
-				wantKey: "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi",
+				wantKey: masterPrivKey1,
 			},
 			{
 				name:    "test vector 1 chain m/0",
@@ -222,7 +228,7 @@ func TestChildDerivation(t *testing.T) {
 				name:    "test vector 2 chain m",
 				master:  testVec2MasterPrivKey,
 				path:    []uint32{},
-				wantKey: "xprv9s21ZrQH143K31xYSDQpPDxsXRTUcvj2iNHm5NUtrGiGG5e2DtALGdso3pGz6ssrdK4PFmM8NSpSBHNqPqm55Qn3LqFtT2emdEXVYsCzC2U",
+				wantKey: masterPrivKey2,
 			},
 			{
 				name:    "test vector 2 chain m/0",
@@ -354,7 +360,7 @@ func TestChildDerivation(t *testing.T) {
 
 	runTests := func(tests []testCase) {
 		for i, test := range tests {
-			extKey, err := extkeys.NewKeyFromString(test.master)
+			extKey, err := NewKeyFromString(test.master)
 			if err != nil {
 				t.Errorf("NewKeyFromString #%d (%s): unexpected error creating extended key: %v", i, test.name, err)
 				continue
@@ -381,29 +387,29 @@ func TestChildDerivation(t *testing.T) {
 
 func TestErrors(t *testing.T) {
 	// Should get an error when seed has too few bytes.
-	_, err := extkeys.NewMaster(bytes.Repeat([]byte{0x00}, 15), []byte{0x00})
-	if err != extkeys.ErrInvalidSeedLen {
+	_, err := NewMaster(bytes.Repeat([]byte{0x00}, 15))
+	if err != ErrInvalidSeedLen {
 		t.Errorf("NewMaster: mismatched error -- got: %v, want: %v",
-			err, extkeys.ErrInvalidSeedLen)
+			err, ErrInvalidSeedLen)
 	}
 
 	// Should get an error when seed has too many bytes.
-	_, err = extkeys.NewMaster(bytes.Repeat([]byte{0x00}, 65), []byte{0x00})
-	if err != extkeys.ErrInvalidSeedLen {
+	_, err = NewMaster(bytes.Repeat([]byte{0x00}, 65))
+	if err != ErrInvalidSeedLen {
 		t.Errorf("NewMaster: mismatched error -- got: %v, want: %v",
-			err, extkeys.ErrInvalidSeedLen)
+			err, ErrInvalidSeedLen)
 	}
 
 	// Generate a new key and neuter it to a public extended key.
-	mnemonic := extkeys.NewMnemonic(extkeys.Salt)
+	mnemonic := NewMnemonic()
 
-	phrase, err := mnemonic.MnemonicPhrase(128, extkeys.EnglishLanguage)
+	phrase, err := mnemonic.MnemonicPhrase(128, EnglishLanguage)
 	if err != nil {
 		t.Errorf("Test failed: could not create seed: %s", err)
 	}
 
 	password := "badpassword"
-	extKey, err := extkeys.NewMaster(mnemonic.MnemonicSeed(phrase, password), []byte(extkeys.Salt))
+	extKey, err := NewMaster(mnemonic.MnemonicSeed(phrase, password))
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 		return
@@ -416,20 +422,20 @@ func TestErrors(t *testing.T) {
 	}
 
 	// Deriving a hardened child extended key should fail from a public key.
-	_, err = pubKey.Child(extkeys.HardenedKeyStart)
-	if err != extkeys.ErrDerivingHardenedFromPublic {
-		t.Errorf("Child: mismatched error -- got: %v, want: %v", err, extkeys.ErrDerivingHardenedFromPublic)
+	_, err = pubKey.Child(HardenedKeyStart)
+	if err != ErrDerivingHardenedFromPublic {
+		t.Errorf("Child: mismatched error -- got: %v, want: %v", err, ErrDerivingHardenedFromPublic)
 	}
 
-	_, err = pubKey.BIP44Child(extkeys.CoinTypeETH, 0)
-	if err != extkeys.ErrInvalidMasterKey {
-		t.Errorf("BIP44Child: mistmatched error -- got: %v, want: %v", err, extkeys.ErrInvalidMasterKey)
+	_, err = pubKey.BIP44Child(CoinTypeETH, 0)
+	if err != ErrInvalidMasterKey {
+		t.Errorf("BIP44Child: mistmatched error -- got: %v, want: %v", err, ErrInvalidMasterKey)
 	}
 
-	childKey, _ := extKey.Child(extkeys.HardenedKeyStart + 1)
-	_, err = childKey.BIP44Child(extkeys.CoinTypeETH, 0) // this should be called from master only
-	if err != extkeys.ErrInvalidMasterKey {
-		t.Errorf("BIP44Child: mistmatched error -- got: %v, want: %v", err, extkeys.ErrInvalidMasterKey)
+	childKey, _ := extKey.Child(HardenedKeyStart + 1)
+	_, err = childKey.BIP44Child(CoinTypeETH, 0) // this should be called from master only
+	if err != ErrInvalidMasterKey {
+		t.Errorf("BIP44Child: mistmatched error -- got: %v, want: %v", err, ErrInvalidMasterKey)
 	}
 
 	// NewKeyFromString failure tests.
@@ -439,16 +445,17 @@ func TestErrors(t *testing.T) {
 		err       error
 		neuter    bool
 		neuterErr error
+		extKey    *ExtendedKey
 	}{
 		{
 			name: "invalid key length",
 			key:  "xpub1234",
-			err:  extkeys.ErrInvalidKeyLen,
+			err:  ErrInvalidKeyLen,
 		},
 		{
 			name: "bad checksum",
 			key:  "xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EBygr15",
-			err:  extkeys.ErrBadChecksum,
+			err:  ErrBadChecksum,
 		},
 		{
 			name: "pubkey not on curve",
@@ -462,10 +469,26 @@ func TestErrors(t *testing.T) {
 			neuter:    true,
 			neuterErr: chaincfg.ErrUnknownHDKeyID,
 		},
+		{
+			name:      "zeroed extended key",
+			key:       EmptyExtendedKeyString,
+			err:       nil,
+			neuter:    false,
+			neuterErr: nil,
+			extKey:    &ExtendedKey{},
+		},
+		{
+			name:      "empty string",
+			key:       "",
+			err:       nil,
+			neuter:    false,
+			neuterErr: nil,
+			extKey:    &ExtendedKey{},
+		},
 	}
 
 	for i, test := range tests {
-		extKey, err := extkeys.NewKeyFromString(test.key)
+		extKey, err := NewKeyFromString(test.key)
 		if !reflect.DeepEqual(err, test.err) {
 			t.Errorf("NewKeyFromString #%d (%s): mismatched error -- got: %v, want: %v", i, test.name, err, test.err)
 			continue
@@ -478,20 +501,27 @@ func TestErrors(t *testing.T) {
 				continue
 			}
 		}
+
+		if test.extKey != nil {
+			if !reflect.DeepEqual(extKey, test.extKey) {
+				t.Errorf("ExtKey #%d (%s): mismatched extended key -- got: %+v, want: %+v", i, test.name, extKey, test.extKey)
+				continue
+			}
+		}
 	}
 }
 
 func TestBIP44ChildDerivation(t *testing.T) {
-	keyString := "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi"
+	keyString := masterPrivKey1
 	derivedKey1String := "xprvA38t8tFW4vbuB7WJXEqMFmZqRrcZUKWqqMcGjjKjr2hbfvPhRtLLJGL4ayWG8shF1VkuUikVGodGshLiKRS7WrdsrGSVDQCY33qoPBxG2Kp"
 	derivedKey2String := "xprvA38t8tFW4vbuDgBNpekPnuMSfpWziDLdF7W9Zd3mPy6eDEkM5F17vk59RtVoFbNdBBq84EJf5CqdZhhEoBkAM4DXHQsDqvUxVnncfnDQEFg"
 
-	extKey, err := extkeys.NewKeyFromString(keyString)
+	extKey, err := NewKeyFromString(keyString)
 	if err != nil {
 		t.Error("NewKeyFromString: cannot create extended key")
 	}
 
-	accounKey1, err := extKey.BIP44Child(extkeys.CoinTypeETH, 0)
+	accounKey1, err := extKey.BIP44Child(CoinTypeETH, 0)
 	if err != nil {
 		t.Error("Error dering BIP44-compliant key")
 	}
@@ -500,7 +530,7 @@ func TestBIP44ChildDerivation(t *testing.T) {
 	}
 	t.Logf("Account 1 key: %s", accounKey1.String())
 
-	accounKey2, err := extKey.BIP44Child(extkeys.CoinTypeETH, 1)
+	accounKey2, err := extKey.BIP44Child(CoinTypeETH, 1)
 	if err != nil {
 		t.Error("Error dering BIP44-compliant key")
 	}
@@ -508,6 +538,68 @@ func TestBIP44ChildDerivation(t *testing.T) {
 		t.Errorf("BIP44Child: key mismatch -- got: %v, want: %v", accounKey2.String(), derivedKey2String)
 	}
 	t.Logf("Account 1 key: %s", accounKey2.String())
+}
+
+func TestHDWalletCompatibility(t *testing.T) {
+	password := "TREZOR"
+	mnemonic := NewMnemonic()
+	mnemonicPhrase := "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+	seed := mnemonic.MnemonicSeed(mnemonicPhrase, password)
+	rootKey, err := NewMaster(seed)
+	if err != nil {
+		t.Errorf("couldn't create master extended key: %v", err)
+	}
+
+	expectedAddresses := []struct {
+		address string
+		pubKey  string
+		privKey string
+	}{
+		{
+			address: "0x9c32F71D4DB8Fb9e1A58B0a80dF79935e7256FA6",
+			pubKey:  "0x03986dee3b8afe24cb8ccb2ac23dac3f8c43d22850d14b809b26d6b8aa5a1f4778",
+			privKey: "0x62f1d86b246c81bdd8f6c166d56896a4a5e1eddbcaebe06480e5c0bc74c28224",
+		},
+		{
+			address: "0x7AF7283bd1462C3b957e8FAc28Dc19cBbF2FAdfe",
+			pubKey:  "0x03462e7b95dab24fe8a57ac897d9026545ec4327c9c5e4a772e5d14cc5422f9489",
+			privKey: "0x49ee230b1605382ac1c40079191bca937fc30e8c2fa845b7de27a96ffcc4ddbf",
+		},
+		{
+			address: "0x05f48E30fCb69ADcd2A591Ebc7123be8BE72D7a1",
+			pubKey:  "0x036650e4b2b8e731a0ef12cda892b70cb95e78ea6e576ba995019b5e9aa7d9c0f5",
+			privKey: "0xeef2c0702151930b84cffcaa642af58e692956314519114e78f3211a6465f28b",
+		},
+		{
+			address: "0xbfE91Bc05cE66013660D7Eb742F74BD324DA5F92",
+			pubKey:  "0x0201d1c12e8fcea03a68ad5fd0d02fd0a4bfe0339618f949e2e30cf311e8b83c46",
+			privKey: "0xbca51d1d3529a0e0787933a2293cf46d9b973ea3ea00e28d3bd33590bc7f7156",
+		},
+	}
+
+	for i := 0; i < len(expectedAddresses); i++ {
+		key, err := rootKey.BIP44Child(CoinTypeETH, uint32(i))
+		if err != nil {
+			t.Errorf("Error deriving BIP44-compliant key: %s", err)
+		}
+
+		privateKeyECDSA := key.ToECDSA()
+		address := crypto.PubkeyToAddress(privateKeyECDSA.PublicKey).Hex()
+
+		if address != expectedAddresses[i].address {
+			t.Errorf("wrong address generated. expected %s, got %s", expectedAddresses[i].address, address)
+		}
+
+		pubKey := fmt.Sprintf("0x%x", (crypto.CompressPubkey(&privateKeyECDSA.PublicKey)))
+		if pubKey != expectedAddresses[i].pubKey {
+			t.Errorf("wrong public key generated. expected %s, got %s", expectedAddresses[i].pubKey, pubKey)
+		}
+
+		privKey := fmt.Sprintf("0x%x", crypto.FromECDSA(privateKeyECDSA))
+		if privKey != expectedAddresses[i].privKey {
+			t.Errorf("wrong private key generated. expected %s, got %s", expectedAddresses[i].privKey, privKey)
+		}
+	}
 }
 
 //func TestNewKey(t *testing.T) {
@@ -520,7 +612,7 @@ func TestBIP44ChildDerivation(t *testing.T) {
 //
 //	password := "badpassword"
 //	mnemonic.salt = "Bitcoin seed"
-//	key, err := NewMaster(mnemonic.MnemonicSeed(phrase, password), []byte(mnemonic.salt))
+//	key, err := NewMaster(mnemonic.MnemonicSeed(phrase, password))
 //	if err != nil {
 //		t.Error(err)
 //	}

@@ -3,15 +3,15 @@ package rpc
 import (
 	"testing"
 
-	"github.com/status-im/status-go/geth/node"
-	"github.com/status-im/status-go/geth/rpc"
-	e2e "github.com/status-im/status-go/t/e2e"
+	"github.com/status-im/status-go/node"
+	"github.com/status-im/status-go/rpc"
+	"github.com/status-im/status-go/t/e2e"
 	. "github.com/status-im/status-go/t/utils" //nolint: golint
 	"github.com/stretchr/testify/suite"
 )
 
 type RPCClientTestSuite struct {
-	e2e.NodeManagerTestSuite
+	e2e.StatusNodeTestSuite
 }
 
 func TestRPCClientTestSuite(t *testing.T) {
@@ -19,12 +19,12 @@ func TestRPCClientTestSuite(t *testing.T) {
 }
 
 func (s *RPCClientTestSuite) SetupTest() {
-	s.NodeManager = node.NewNodeManager()
-	s.NotNil(s.NodeManager)
+	s.StatusNode = node.New()
+	s.NotNil(s.StatusNode)
 }
 
 func (s *RPCClientTestSuite) TestNewClient() {
-	config, err := e2e.MakeTestNodeConfig(GetNetworkID())
+	config, err := MakeTestNodeConfig(GetNetworkID())
 	s.NoError(err)
 
 	// upstream disabled

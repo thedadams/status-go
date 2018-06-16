@@ -19,6 +19,7 @@ package whisperv6
 import (
 	"fmt"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -36,6 +37,7 @@ type Peer struct {
 
 	trusted        bool
 	powRequirement float64
+	bloomMu        sync.Mutex
 	bloomFilter    []byte
 	fullNode       bool
 
@@ -54,7 +56,7 @@ func newPeer(host *Whisper, remote *p2p.Peer, rw p2p.MsgReadWriter) *Peer {
 		powRequirement: 0.0,
 		known:          set.New(),
 		quit:           make(chan struct{}),
-		bloomFilter:    makeFullNodeBloom(),
+		bloomFilter:    MakeFullNodeBloom(),
 		fullNode:       true,
 	}
 }
@@ -118,7 +120,7 @@ func (peer *Peer) handshake() error {
 		err = s.Decode(&bloom)
 		if err == nil {
 			sz := len(bloom)
-			if sz != bloomFilterSize && sz != 0 {
+			if sz != BloomFilterSize && sz != 0 {
 				return fmt.Errorf("peer [%x] sent bad status message: wrong bloom filter size %d", peer.ID(), sz)
 			}
 			peer.setBloomFilter(bloom)
@@ -185,6 +187,10 @@ func (peer *Peer) expire() {
 // broadcast iterates over the collection of envelopes and transmits yet unknown
 // ones over the network.
 func (peer *Peer) broadcast() error {
+	if peer.peer.IsFlaky() {
+		log.Trace("Waiting for a peer to restore communication", "ID", peer.peer.ID())
+		return nil
+	}
 	envelopes := peer.host.Envelopes()
 	bundle := make([]*Envelope, 0, len(envelopes))
 	for _, envelope := range envelopes {
@@ -202,6 +208,11 @@ func (peer *Peer) broadcast() error {
 		// mark envelopes only if they were successfully sent
 		for _, e := range bundle {
 			peer.mark(e)
+			peer.host.envelopeFeed.Send(EnvelopeEvent{
+				Event: EventEnvelopeSent,
+				Hash:  e.Hash(),
+				Peer:  peer.peer.ID(), // specifically discover.NodeID because it can be pretty printed
+			})
 		}
 
 		log.Trace("broadcast", "num. messages", len(bundle))
@@ -225,20 +236,24 @@ func (peer *Peer) notifyAboutBloomFilterChange(bloom []byte) error {
 }
 
 func (peer *Peer) bloomMatch(env *Envelope) bool {
-	return peer.fullNode || bloomFilterMatch(peer.bloomFilter, env.Bloom())
+	peer.bloomMu.Lock()
+	defer peer.bloomMu.Unlock()
+	return peer.fullNode || BloomFilterMatch(peer.bloomFilter, env.Bloom())
 }
 
 func (peer *Peer) setBloomFilter(bloom []byte) {
+	peer.bloomMu.Lock()
+	defer peer.bloomMu.Unlock()
 	peer.bloomFilter = bloom
 	peer.fullNode = isFullNode(bloom)
 	if peer.fullNode && peer.bloomFilter == nil {
-		peer.bloomFilter = makeFullNodeBloom()
+		peer.bloomFilter = MakeFullNodeBloom()
 	}
 }
 
-func makeFullNodeBloom() []byte {
-	bloom := make([]byte, bloomFilterSize)
-	for i := 0; i < bloomFilterSize; i++ {
+func MakeFullNodeBloom() []byte {
+	bloom := make([]byte, BloomFilterSize)
+	for i := 0; i < BloomFilterSize; i++ {
 		bloom[i] = 0xFF
 	}
 	return bloom

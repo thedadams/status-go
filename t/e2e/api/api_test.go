@@ -9,14 +9,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/status-im/status-go/geth/api"
-	"github.com/status-im/status-go/geth/log"
-	"github.com/status-im/status-go/geth/node"
-	"github.com/status-im/status-go/geth/params"
-	"github.com/status-im/status-go/geth/signal"
-	e2e "github.com/status-im/status-go/t/e2e"
+	"github.com/ethereum/go-ethereum/log"
+	"github.com/status-im/status-go/api"
+	"github.com/status-im/status-go/node"
+	"github.com/status-im/status-go/params"
+	"github.com/status-im/status-go/signal"
 	. "github.com/status-im/status-go/t/utils"
 	"github.com/stretchr/testify/suite"
+	"github.com/syndtr/goleveldb/leveldb"
+	"github.com/syndtr/goleveldb/leveldb/storage"
 )
 
 const (
@@ -65,10 +66,10 @@ func (s *APITestSuite) TestRaceConditions() {
 	progress := make(chan struct{}, cnt)
 	rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
 
-	nodeConfig1, err := e2e.MakeTestNodeConfig(GetNetworkID())
+	nodeConfig1, err := MakeTestNodeConfig(GetNetworkID())
 	s.NoError(err)
 
-	nodeConfig2, err := e2e.MakeTestNodeConfig(GetNetworkID())
+	nodeConfig2, err := MakeTestNodeConfig(GetNetworkID())
 	s.NoError(err)
 
 	nodeConfigs := []*params.NodeConfig{nodeConfig1, nodeConfig2}
@@ -118,7 +119,7 @@ func (s *APITestSuite) TestRaceConditions() {
 	}
 
 	for range progress {
-		cnt -= 1
+		cnt--
 		if cnt <= 0 {
 			break
 		}
@@ -133,12 +134,12 @@ func (s *APITestSuite) TestCellsRemovedAfterSwitchAccount() {
 	const itersCount = 5
 	var (
 		require   = s.Require()
-		getChatId = func(id int) string {
+		getChatID = func(id int) string {
 			return testChatID + strconv.Itoa(id)
 		}
 	)
 
-	config, err := e2e.MakeTestNodeConfig(GetNetworkID())
+	config, err := MakeTestNodeConfig(GetNetworkID())
 	require.NoError(err)
 	err = s.api.StartNode(config)
 	require.NoError(err)
@@ -154,7 +155,7 @@ func (s *APITestSuite) TestCellsRemovedAfterSwitchAccount() {
 	require.NoError(err)
 
 	for i := 0; i < itersCount; i++ {
-		_, e := s.api.JailManager().CreateCell(getChatId(i))
+		_, e := s.api.JailManager().CreateCell(getChatID(i))
 		require.NoError(e)
 	}
 
@@ -162,7 +163,7 @@ func (s *APITestSuite) TestCellsRemovedAfterSwitchAccount() {
 	require.NoError(err)
 
 	for i := 0; i < itersCount; i++ {
-		_, e := s.api.JailManager().Cell(getChatId(i))
+		_, e := s.api.JailManager().Cell(getChatID(i))
 		require.Error(e)
 	}
 }
@@ -175,7 +176,7 @@ func (s *APITestSuite) TestLogoutRemovesCells() {
 		require = s.Require()
 	)
 
-	config, err := e2e.MakeTestNodeConfig(GetNetworkID())
+	config, err := MakeTestNodeConfig(GetNetworkID())
 	require.NoError(err)
 	err = s.api.StartNode(config)
 	require.NoError(err)
@@ -202,10 +203,18 @@ func (s *APITestSuite) TestEventsNodeStartStop() {
 		var envelope signal.Envelope
 		err := json.Unmarshal([]byte(jsonEvent), &envelope)
 		s.NoError(err)
+		// whitelist types that we are interested in
+		switch envelope.Type {
+		case signal.EventNodeStarted:
+		case signal.EventNodeStopped:
+		case signal.EventNodeReady:
+		default:
+			return
+		}
 		envelopes <- envelope
 	})
 
-	nodeConfig, err := e2e.MakeTestNodeConfig(GetNetworkID())
+	nodeConfig, err := MakeTestNodeConfig(GetNetworkID())
 	s.NoError(err)
 	s.NoError(s.api.StartNode(nodeConfig))
 	s.NoError(s.api.StopNode())
@@ -243,11 +252,15 @@ func (s *APITestSuite) TestNodeStartCrash() {
 	})
 	defer signal.ResetDefaultNodeNotificationHandler()
 
-	nodeConfig, err := e2e.MakeTestNodeConfig(GetNetworkID())
+	nodeConfig, err := MakeTestNodeConfig(GetNetworkID())
 	s.NoError(err)
 
+	db, err := leveldb.Open(storage.NewMemStorage(), nil)
+	s.NoError(err)
+	defer func() { s.NoError(db.Close()) }()
+
 	// start node outside the manager (on the same port), so that manager node.Start() method fails
-	outsideNode, err := node.MakeNode(nodeConfig)
+	outsideNode, err := node.MakeNode(nodeConfig, db)
 	s.NoError(err)
 	err = outsideNode.Start()
 	s.NoError(err)

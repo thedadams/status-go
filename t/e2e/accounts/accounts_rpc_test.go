@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/status-im/status-go/geth/params"
-	e2e "github.com/status-im/status-go/t/e2e"
+	"github.com/status-im/status-go/params"
+	"github.com/status-im/status-go/t/e2e"
 	. "github.com/status-im/status-go/t/utils"
 	"github.com/stretchr/testify/suite"
 )
@@ -23,10 +23,10 @@ func (s *AccountsTestSuite) TestRPCEthAccounts() {
 	defer s.StopTestBackend()
 
 	// log into test account
-	err := s.Backend.AccountManager().SelectAccount(TestConfig.Account1.Address, TestConfig.Account1.Password)
+	err := s.Backend.SelectAccount(TestConfig.Account1.Address, TestConfig.Account1.Password)
 	s.NoError(err)
 
-	rpcClient := s.Backend.NodeManager().RPCClient()
+	rpcClient := s.Backend.StatusNode().RPCClient()
 	s.NotNil(rpcClient)
 
 	expectedResponse := `{"jsonrpc":"2.0","id":1,"result":["` + strings.ToLower(TestConfig.Account1.Address) + `"]}`
@@ -50,10 +50,10 @@ func (s *AccountsTestSuite) TestRPCEthAccountsWithUpstream() {
 	defer s.StopTestBackend()
 
 	// log into test account
-	err = s.Backend.AccountManager().SelectAccount(TestConfig.Account1.Address, TestConfig.Account1.Password)
+	err = s.Backend.SelectAccount(TestConfig.Account1.Address, TestConfig.Account1.Password)
 	s.NoError(err)
 
-	rpcClient := s.Backend.NodeManager().RPCClient()
+	rpcClient := s.Backend.StatusNode().RPCClient()
 	s.NotNil(rpcClient)
 
 	expectedResponse := `{"jsonrpc":"2.0","id":1,"result":["` + strings.ToLower(TestConfig.Account1.Address) + `"]}`

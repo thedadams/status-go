@@ -7,17 +7,21 @@ import (
 	"os"
 
 	"github.com/NaySoftware/go-fcm"
-	"github.com/status-im/status-go/geth/common"
-	"github.com/status-im/status-go/geth/log"
-	"github.com/status-im/status-go/geth/params"
+	"github.com/ethereum/go-ethereum/log"
+	"github.com/status-im/status-go/logutils"
+	"github.com/status-im/status-go/params"
 	"github.com/status-im/status-go/profiling"
+	"github.com/status-im/status-go/sign"
 	"gopkg.in/go-playground/validator.v9"
 )
 
+// All general log messages in this package should be routed through this logger.
+var logger = log.New("package", "status-go/lib")
+
 //GenerateConfig for status node
 //export GenerateConfig
-func GenerateConfig(datadir *C.char, networkID C.int, devMode C.int) *C.char {
-	config, err := params.NewNodeConfig(C.GoString(datadir), uint64(networkID), devMode == 1)
+func GenerateConfig(datadir *C.char, networkID C.int) *C.char {
+	config, err := params.NewNodeConfig(C.GoString(datadir), "", uint64(networkID))
 	if err != nil {
 		return makeJSONResponse(err)
 	}
@@ -38,7 +42,12 @@ func StartNode(configJSON *C.char) *C.char {
 		return makeJSONResponse(err)
 	}
 
+	if err := logutils.OverrideRootLog(config.LogEnabled, config.LogLevel, config.LogFile, false); err != nil {
+		return makeJSONResponse(err)
+	}
+
 	statusAPI.StartNodeAsync(config)
+
 	return makeJSONResponse(nil)
 }
 
@@ -52,22 +61,22 @@ func StopNode() *C.char {
 //ValidateNodeConfig validates config for status node
 //export ValidateNodeConfig
 func ValidateNodeConfig(configJSON *C.char) *C.char {
-	var resp common.APIDetailedResponse
+	var resp APIDetailedResponse
 
 	_, err := params.LoadNodeConfig(C.GoString(configJSON))
 
-	// Convert errors to common.APIDetailedResponse
+	// Convert errors to APIDetailedResponse
 	switch err := err.(type) {
 	case validator.ValidationErrors:
-		resp = common.APIDetailedResponse{
+		resp = APIDetailedResponse{
 			Message:     "validation: validation failed",
-			FieldErrors: make([]common.APIFieldError, len(err)),
+			FieldErrors: make([]APIFieldError, len(err)),
 		}
 
 		for i, ve := range err {
-			resp.FieldErrors[i] = common.APIFieldError{
+			resp.FieldErrors[i] = APIFieldError{
 				Parameter: ve.Namespace(),
-				Errors: []common.APIError{
+				Errors: []APIError{
 					{
 						Message: fmt.Sprintf("field validation failed on the '%s' tag", ve.Tag()),
 					},
@@ -75,11 +84,11 @@ func ValidateNodeConfig(configJSON *C.char) *C.char {
 			}
 		}
 	case error:
-		resp = common.APIDetailedResponse{
+		resp = APIDetailedResponse{
 			Message: fmt.Sprintf("validation: %s", err.Error()),
 		}
 	case nil:
-		resp = common.APIDetailedResponse{
+		resp = APIDetailedResponse{
 			Status: true,
 		}
 	}
@@ -99,10 +108,17 @@ func ResetChainData() *C.char {
 	return makeJSONResponse(nil)
 }
 
-//CallRPC calls status node via rpc
+//CallRPC calls public APIs via RPC
 //export CallRPC
 func CallRPC(inputJSON *C.char) *C.char {
 	outputJSON := statusAPI.CallRPC(C.GoString(inputJSON))
+	return C.CString(outputJSON)
+}
+
+//CallPrivateRPC calls both public and private APIs via RPC
+//export CallPrivateRPC
+func CallPrivateRPC(inputJSON *C.char) *C.char {
+	outputJSON := statusAPI.CallPrivateRPC(C.GoString(inputJSON))
 	return C.CString(outputJSON)
 }
 
@@ -118,7 +134,7 @@ func CreateAccount(password *C.char) *C.char {
 		errString = err.Error()
 	}
 
-	out := common.AccountInfo{
+	out := AccountInfo{
 		Address:  address,
 		PubKey:   pubKey,
 		Mnemonic: mnemonic,
@@ -139,7 +155,7 @@ func CreateChildAccount(parentAddress, password *C.char) *C.char {
 		errString = err.Error()
 	}
 
-	out := common.AccountInfo{
+	out := AccountInfo{
 		Address: address,
 		PubKey:  pubKey,
 		Error:   errString,
@@ -159,7 +175,7 @@ func RecoverAccount(password, mnemonic *C.char) *C.char {
 		errString = err.Error()
 	}
 
-	out := common.AccountInfo{
+	out := AccountInfo{
 		Address:  address,
 		PubKey:   pubKey,
 		Mnemonic: C.GoString(mnemonic),
@@ -191,10 +207,90 @@ func Logout() *C.char {
 	return makeJSONResponse(err)
 }
 
-//CompleteTransaction instructs backend to complete sending of a given transaction
-//export CompleteTransaction
-func CompleteTransaction(id, password *C.char) *C.char {
-	txHash, err := statusAPI.CompleteTransaction(common.QueuedTxID(C.GoString(id)), C.GoString(password))
+//ApproveSignRequestWithArgs instructs backend to complete sending of a given transaction.
+// gas and gasPrice will be overrided with the given values before signing the
+// transaction.
+//export ApproveSignRequestWithArgs
+func ApproveSignRequestWithArgs(id, password *C.char, gas, gasPrice C.longlong) *C.char {
+	result := statusAPI.ApproveSignRequestWithArgs(C.GoString(id), C.GoString(password), int64(gas), int64(gasPrice))
+
+	return prepareApproveSignRequestResponse(result, id)
+}
+
+//ApproveSignRequest instructs backend to complete sending of a given transaction.
+//export ApproveSignRequest
+func ApproveSignRequest(id, password *C.char) *C.char {
+	result := statusAPI.ApproveSignRequest(C.GoString(id), C.GoString(password))
+
+	return prepareApproveSignRequestResponse(result, id)
+}
+
+// prepareApproveSignRequestResponse based on a sign.Result prepares the binding
+// response.
+func prepareApproveSignRequestResponse(result sign.Result, id *C.char) *C.char {
+	errString := ""
+	if result.Error != nil {
+		fmt.Fprintln(os.Stderr, result.Error)
+		errString = result.Error.Error()
+	}
+
+	out := SignRequestResult{
+		ID:    C.GoString(id),
+		Hash:  result.Response.Hex(),
+		Error: errString,
+	}
+	outBytes, err := json.Marshal(out)
+	if err != nil {
+		logger.Error("failed to marshal ApproveSignRequest output", "error", err)
+		return makeJSONResponse(err)
+	}
+
+	return C.CString(string(outBytes))
+}
+
+//ApproveSignRequests instructs backend to complete sending of multiple transactions
+//export ApproveSignRequests
+func ApproveSignRequests(ids, password *C.char) *C.char {
+	out := SignRequestsResult{}
+	out.Results = make(map[string]SignRequestResult)
+
+	parsedIDs, err := ParseJSONArray(C.GoString(ids))
+	if err != nil {
+		out.Results["none"] = SignRequestResult{
+			Error: err.Error(),
+		}
+	} else {
+		txIDs := make([]string, len(parsedIDs))
+		for i, id := range parsedIDs {
+			txIDs[i] = id
+		}
+
+		results := statusAPI.ApproveSignRequests(txIDs, C.GoString(password))
+		for txID, result := range results {
+			txResult := SignRequestResult{
+				ID:   txID,
+				Hash: result.Response.Hex(),
+			}
+			if result.Error != nil {
+				txResult.Error = result.Error.Error()
+			}
+			out.Results[txID] = txResult
+		}
+	}
+
+	outBytes, err := json.Marshal(out)
+	if err != nil {
+		logger.Error("failed to marshal ApproveSignRequests output", "error", err)
+		return makeJSONResponse(err)
+	}
+
+	return C.CString(string(outBytes))
+}
+
+//DiscardSignRequest discards a given transaction from transaction queue
+//export DiscardSignRequest
+func DiscardSignRequest(id *C.char) *C.char {
+	err := statusAPI.DiscardSignRequest(C.GoString(id))
 
 	errString := ""
 	if err != nil {
@@ -202,115 +298,48 @@ func CompleteTransaction(id, password *C.char) *C.char {
 		errString = err.Error()
 	}
 
-	out := common.CompleteTransactionResult{
-		ID:    C.GoString(id),
-		Hash:  txHash.Hex(),
-		Error: errString,
-	}
-	outBytes, err := json.Marshal(out)
-	if err != nil {
-		log.Error("failed to marshal CompleteTransaction output", "error", err.Error())
-		return makeJSONResponse(err)
-	}
-
-	return C.CString(string(outBytes))
-}
-
-//CompleteTransactions instructs backend to complete sending of multiple transactions
-//export CompleteTransactions
-func CompleteTransactions(ids, password *C.char) *C.char {
-	out := common.CompleteTransactionsResult{}
-	out.Results = make(map[string]common.CompleteTransactionResult)
-
-	parsedIDs, err := common.ParseJSONArray(C.GoString(ids))
-	if err != nil {
-		out.Results["none"] = common.CompleteTransactionResult{
-			Error: err.Error(),
-		}
-	} else {
-		txIDs := make([]common.QueuedTxID, len(parsedIDs))
-		for i, id := range parsedIDs {
-			txIDs[i] = common.QueuedTxID(id)
-		}
-
-		results := statusAPI.CompleteTransactions(txIDs, C.GoString(password))
-		for txID, result := range results {
-			txResult := common.CompleteTransactionResult{
-				ID:   string(txID),
-				Hash: result.Hash.Hex(),
-			}
-			if result.Error != nil {
-				txResult.Error = result.Error.Error()
-			}
-			out.Results[string(txID)] = txResult
-		}
-	}
-
-	outBytes, err := json.Marshal(out)
-	if err != nil {
-		log.Error("failed to marshal CompleteTransactions output", "error", err.Error())
-		return makeJSONResponse(err)
-	}
-
-	return C.CString(string(outBytes))
-}
-
-//DiscardTransaction discards a given transaction from transaction queue
-//export DiscardTransaction
-func DiscardTransaction(id *C.char) *C.char {
-	err := statusAPI.DiscardTransaction(common.QueuedTxID(C.GoString(id)))
-
-	errString := ""
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		errString = err.Error()
-	}
-
-	out := common.DiscardTransactionResult{
+	out := DiscardSignRequestResult{
 		ID:    C.GoString(id),
 		Error: errString,
 	}
 	outBytes, err := json.Marshal(out)
 	if err != nil {
-		log.Error("failed to marshal DiscardTransaction output", "error", err.Error())
+		log.Error("failed to marshal DiscardSignRequest output", "error", err)
 		return makeJSONResponse(err)
 	}
 
 	return C.CString(string(outBytes))
 }
 
-//DiscardTransactions discards given multiple transactions from transaction queue
-//export DiscardTransactions
-func DiscardTransactions(ids *C.char) *C.char {
-	out := common.DiscardTransactionsResult{}
-	out.Results = make(map[string]common.DiscardTransactionResult)
+//DiscardSignRequests discards given multiple transactions from transaction queue
+//export DiscardSignRequests
+func DiscardSignRequests(ids *C.char) *C.char {
+	out := DiscardSignRequestsResult{}
+	out.Results = make(map[string]DiscardSignRequestResult)
 
-	parsedIDs, err := common.ParseJSONArray(C.GoString(ids))
+	parsedIDs, err := ParseJSONArray(C.GoString(ids))
 	if err != nil {
-		out.Results["none"] = common.DiscardTransactionResult{
+		out.Results["none"] = DiscardSignRequestResult{
 			Error: err.Error(),
 		}
 	} else {
-		txIDs := make([]common.QueuedTxID, len(parsedIDs))
+		txIDs := make([]string, len(parsedIDs))
 		for i, id := range parsedIDs {
-			txIDs[i] = common.QueuedTxID(id)
+			txIDs[i] = id
 		}
 
-		results := statusAPI.DiscardTransactions(txIDs)
-		for txID, result := range results {
-			txResult := common.DiscardTransactionResult{
-				ID: string(txID),
+		results := statusAPI.DiscardSignRequests(txIDs)
+		for txID, err := range results {
+			out.Results[txID] = DiscardSignRequestResult{
+				ID:    txID,
+				Error: err.Error(),
 			}
-			if result.Error != nil {
-				txResult.Error = result.Error.Error()
-			}
-			out.Results[string(txID)] = txResult
 		}
 	}
 
 	outBytes, err := json.Marshal(out)
 	if err != nil {
-		log.Error("failed to marshal DiscardTransactions output", "error", err.Error())
+		logger.Error("failed to marshal DiscardSignRequests output", "error", err)
 		return makeJSONResponse(err)
 	}
 
@@ -380,20 +409,12 @@ func makeJSONResponse(err error) *C.char {
 		errString = err.Error()
 	}
 
-	out := common.APIResponse{
+	out := APIResponse{
 		Error: errString,
 	}
 	outBytes, _ := json.Marshal(out)
 
 	return C.CString(string(outBytes))
-}
-
-// Notify sends push notification by given token
-// @deprecated
-//export Notify
-func Notify(token *C.char) *C.char {
-	res := statusAPI.Notify(C.GoString(token))
-	return C.CString(res)
 }
 
 // NotifyUsers sends push notifications by given tokens.
@@ -406,14 +427,14 @@ func NotifyUsers(message, payloadJSON, tokensArray *C.char) (outCBytes *C.char) 
 	errString := ""
 
 	defer func() {
-		out := common.NotifyResult{
+		out := NotifyResult{
 			Status: err == nil,
 			Error:  errString,
 		}
 
 		outBytes, err = json.Marshal(out)
 		if err != nil {
-			log.Error("failed to marshal Notify output", "error", err.Error())
+			logger.Error("failed to marshal Notify output", "error", err)
 			outCBytes = makeJSONResponse(err)
 			return
 		}
@@ -421,7 +442,7 @@ func NotifyUsers(message, payloadJSON, tokensArray *C.char) (outCBytes *C.char) 
 		outCBytes = C.CString(string(outBytes))
 	}()
 
-	tokens, err := common.ParseJSONArray(C.GoString(tokensArray))
+	tokens, err := ParseJSONArray(C.GoString(tokensArray))
 	if err != nil {
 		errString = err.Error()
 		return
@@ -446,6 +467,19 @@ func NotifyUsers(message, payloadJSON, tokensArray *C.char) (outCBytes *C.char) 
 // AddPeer adds an enode as a peer.
 //export AddPeer
 func AddPeer(enode *C.char) *C.char {
-	err := statusAPI.NodeManager().AddPeer(C.GoString(enode))
+	err := statusAPI.StatusNode().AddPeer(C.GoString(enode))
 	return makeJSONResponse(err)
+}
+
+// ConnectionChange handles network state changes as reported
+// by ReactNative (see https://facebook.github.io/react-native/docs/netinfo.html)
+//export ConnectionChange
+func ConnectionChange(typ *C.char, expensive C.int) {
+	statusAPI.ConnectionChange(C.GoString(typ), expensive == 1)
+}
+
+// AppStateChange handles app state changes (background/foreground).
+//export AppStateChange
+func AppStateChange(state *C.char) {
+	statusAPI.AppStateChange(C.GoString(state))
 }

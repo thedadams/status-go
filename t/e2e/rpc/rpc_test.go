@@ -10,9 +10,9 @@ import (
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/status-im/status-go/geth/node"
-	"github.com/status-im/status-go/geth/params"
-	e2e "github.com/status-im/status-go/t/e2e"
+	"github.com/status-im/status-go/node"
+	"github.com/status-im/status-go/params"
+	"github.com/status-im/status-go/t/e2e"
 	. "github.com/status-im/status-go/t/utils"
 	"github.com/stretchr/testify/suite"
 )
@@ -22,12 +22,12 @@ func TestRPCTestSuite(t *testing.T) {
 }
 
 type RPCTestSuite struct {
-	e2e.NodeManagerTestSuite
+	e2e.StatusNodeTestSuite
 }
 
 func (s *RPCTestSuite) SetupTest() {
-	s.NodeManager = node.NewNodeManager()
-	s.NotNil(s.NodeManager)
+	s.StatusNode = node.New()
+	s.NotNil(s.StatusNode)
 }
 
 func (s *RPCTestSuite) TestCallRPC() {
@@ -36,11 +36,10 @@ func (s *RPCTestSuite) TestCallRPC() {
 	}
 
 	for _, upstreamEnabled := range []bool{false, true} {
-		nodeConfig, err := e2e.MakeTestNodeConfig(GetNetworkID())
+		nodeConfig, err := MakeTestNodeConfig(GetNetworkID())
 		s.NoError(err)
 
 		nodeConfig.IPCEnabled = false
-		nodeConfig.WSEnabled = false
 		nodeConfig.HTTPHost = "" // to make sure that no HTTP interface is started
 
 		if upstreamEnabled {
@@ -51,9 +50,9 @@ func (s *RPCTestSuite) TestCallRPC() {
 			nodeConfig.UpstreamConfig.URL = networkURL
 		}
 
-		s.NoError(s.NodeManager.StartNode(nodeConfig))
+		s.NoError(s.StatusNode.Start(nodeConfig))
 
-		rpcClient := s.NodeManager.RPCClient()
+		rpcClient := s.StatusNode.RPCClient()
 		s.NotNil(rpcClient)
 
 		type rpcCall struct {
@@ -64,7 +63,7 @@ func (s *RPCTestSuite) TestCallRPC() {
 			{
 				`{"jsonrpc":"2.0","method":"shh_version","params":[],"id":67}`,
 				func(resultJSON string) {
-					expected := `{"jsonrpc":"2.0","id":67,"result":"5.0"}`
+					expected := `{"jsonrpc":"2.0","id":67,"result":"6.0"}`
 					s.Equal(expected, resultJSON)
 				},
 			},
@@ -120,53 +119,55 @@ func (s *RPCTestSuite) TestCallRPC() {
 		case <-done:
 		}
 
-		s.NoError(s.NodeManager.StopNode())
+		s.NoError(s.StatusNode.Stop())
 	}
 }
 
 // TestCallRawResult checks if returned response is a valid JSON-RPC response.
 func (s *RPCTestSuite) TestCallRawResult() {
-	nodeConfig, err := e2e.MakeTestNodeConfig(GetNetworkID())
+	nodeConfig, err := MakeTestNodeConfig(GetNetworkID())
 	s.NoError(err)
 
-	s.NoError(s.NodeManager.StartNode(nodeConfig))
+	s.NoError(s.StatusNode.Start(nodeConfig))
 
-	client := s.NodeManager.RPCClient()
+	client := s.StatusNode.RPCClient()
 	s.NotNil(client)
 
 	jsonResult := client.CallRaw(`{"jsonrpc":"2.0","method":"shh_version","params":[],"id":67}`)
-	s.Equal(`{"jsonrpc":"2.0","id":67,"result":"5.0"}`, jsonResult)
+	s.Equal(`{"jsonrpc":"2.0","id":67,"result":"6.0"}`, jsonResult)
 
-	s.NoError(s.NodeManager.StopNode())
+	s.NoError(s.StatusNode.Stop())
 }
 
 // TestCallRawResultGetTransactionReceipt checks if returned response
-// for a not yet mained transaction is null.
+// for a not yet mined transaction is "result": null.
 // Issue: https://github.com/status-im/status-go/issues/547
 func (s *RPCTestSuite) TestCallRawResultGetTransactionReceipt() {
-	nodeConfig, err := e2e.MakeTestNodeConfig(GetNetworkID())
+	nodeConfig, err := MakeTestNodeConfig(GetNetworkID())
 	s.NoError(err)
 
-	s.NoError(s.NodeManager.StartNode(nodeConfig))
+	s.NoError(s.StatusNode.Start(nodeConfig))
 
-	client := s.NodeManager.RPCClient()
+	client := s.StatusNode.RPCClient()
 	s.NotNil(client)
 
 	jsonResult := client.CallRaw(`{"jsonrpc":"2.0","method":"eth_getTransactionReceipt","params":["0x0ca0d8f2422f62bea77e24ed17db5711a77fa72064cccbb8e53c53b699cd3b34"],"id":5}`)
 	s.Equal(`{"jsonrpc":"2.0","id":5,"result":null}`, jsonResult)
 
-	s.NoError(s.NodeManager.StopNode())
+	s.NoError(s.StatusNode.Stop())
 }
 
 // TestCallContextResult checks if result passed to CallContext
 // is set accordingly to its underlying memory layout.
 func (s *RPCTestSuite) TestCallContextResult() {
+	CheckTestSkipForNetworks(s.T(), params.MainNetworkID)
+
 	s.StartTestNode()
 	defer s.StopTestNode()
 
-	EnsureNodeSync(s.NodeManager)
+	EnsureNodeSync(s.StatusNode.EnsureSync)
 
-	client := s.NodeManager.RPCClient()
+	client := s.StatusNode.RPCClient()
 	s.NotNil(client)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)

@@ -22,6 +22,7 @@ import (
 	"net"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common/mclock"
@@ -38,7 +39,10 @@ const (
 
 	snappyProtocolVersion = 5
 
-	pingInterval = 15 * time.Second
+	pingInterval = 1 * time.Second
+	// watchdogInterval intentionally lower than ping interval.
+	// this way we reduce potential flaky window size.
+	watchdogInterval = 200 * time.Millisecond
 )
 
 const (
@@ -47,8 +51,6 @@ const (
 	discMsg      = 0x01
 	pingMsg      = 0x02
 	pongMsg      = 0x03
-	getPeersMsg  = 0x04
-	peersMsg     = 0x05
 )
 
 // protoHandshake is the RLP structure of the protocol handshake.
@@ -102,6 +104,7 @@ type Peer struct {
 	log     log.Logger
 	created mclock.AbsTime
 
+	flaky    int32
 	wg       sync.WaitGroup
 	protoErr chan error
 	closed   chan struct{}
@@ -118,6 +121,11 @@ func NewPeer(id discover.NodeID, name string, caps []Cap) *Peer {
 	peer := newPeer(conn, nil)
 	close(peer.closed) // ensures Disconnect doesn't block
 	return peer
+}
+
+// IsFlaky returns true if there was no incoming traffic recently.
+func (p *Peer) IsFlaky() bool {
+	return atomic.LoadInt32(&p.flaky) == 1
 }
 
 // ID returns the node's public key.
@@ -160,6 +168,11 @@ func (p *Peer) String() string {
 	return fmt.Sprintf("Peer %x %v", p.rw.id[:8], p.RemoteAddr())
 }
 
+// Inbound returns true if the peer is an inbound connection
+func (p *Peer) Inbound() bool {
+	return p.rw.flags&inboundConn != 0
+}
+
 func newPeer(conn *conn, protocols []Protocol) *Peer {
 	protomap := matchProtocols(protocols, conn.caps, conn)
 	p := &Peer{
@@ -185,8 +198,10 @@ func (p *Peer) run() (remoteRequested bool, err error) {
 		readErr    = make(chan error, 1)
 		reason     DiscReason // sent to the peer
 	)
-	p.wg.Add(2)
-	go p.readLoop(readErr)
+	p.wg.Add(3)
+	reads := make(chan struct{}, 10) // channel for reads
+	go p.readLoop(readErr, reads)
+	go p.watchdogLoop(reads)
 	go p.pingLoop()
 
 	// Start all protocol handlers.
@@ -245,7 +260,24 @@ func (p *Peer) pingLoop() {
 	}
 }
 
-func (p *Peer) readLoop(errc chan<- error) {
+func (p *Peer) watchdogLoop(reads <-chan struct{}) {
+	defer p.wg.Done()
+	hb := time.NewTimer(watchdogInterval)
+	defer hb.Stop()
+	for {
+		select {
+		case <-reads:
+			atomic.StoreInt32(&p.flaky, 0)
+		case <-hb.C:
+			atomic.StoreInt32(&p.flaky, 1)
+		case <-p.closed:
+			return
+		}
+		hb.Reset(watchdogInterval)
+	}
+}
+
+func (p *Peer) readLoop(errc chan<- error, reads chan<- struct{}) {
 	defer p.wg.Done()
 	for {
 		msg, err := p.rw.ReadMsg()
@@ -258,6 +290,7 @@ func (p *Peer) readLoop(errc chan<- error) {
 			errc <- err
 			return
 		}
+		reads <- struct{}{}
 	}
 }
 
@@ -414,6 +447,9 @@ type PeerInfo struct {
 	Network struct {
 		LocalAddress  string `json:"localAddress"`  // Local endpoint of the TCP data connection
 		RemoteAddress string `json:"remoteAddress"` // Remote endpoint of the TCP data connection
+		Inbound       bool   `json:"inbound"`
+		Trusted       bool   `json:"trusted"`
+		Static        bool   `json:"static"`
 	} `json:"network"`
 	Protocols map[string]interface{} `json:"protocols"` // Sub-protocol specific metadata fields
 }
@@ -434,6 +470,9 @@ func (p *Peer) Info() *PeerInfo {
 	}
 	info.Network.LocalAddress = p.LocalAddr().String()
 	info.Network.RemoteAddress = p.RemoteAddr().String()
+	info.Network.Inbound = p.rw.is(inboundConn)
+	info.Network.Trusted = p.rw.is(trustedConn)
+	info.Network.Static = p.rw.is(staticDialedConn)
 
 	// Gather all the running protocol infos
 	for _, proto := range p.running {

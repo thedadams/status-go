@@ -2,10 +2,9 @@ package main
 
 import (
 	"context"
-	"log"
 	"time"
 
-	"github.com/status-im/status-go/geth/common"
+	"github.com/status-im/status-go/node"
 )
 
 func createContextFromTimeout(timeout int) (context.Context, context.CancelFunc) {
@@ -20,8 +19,9 @@ func createContextFromTimeout(timeout int) (context.Context, context.CancelFunc)
 // It returns an exit code (`0` if successful or `1` in case of error)
 // that can be used in `os.Exit` to exit immediately when the function returns.
 // The special exit code `-1` is used if execution was interrupted.
-func syncAndStopNode(interruptCh <-chan struct{}, nodeManager common.NodeManager, timeout int) (exitCode int) {
-	log.Printf("syncAndStopNode: node will synchronize the chain and exit (timeout %d mins)", timeout)
+func syncAndStopNode(interruptCh <-chan struct{}, statusNode *node.StatusNode, timeout int) (exitCode int) {
+
+	logger.Info("syncAndStopNode: node will synchronize the chain and exit", "timeoutInMins", timeout)
 
 	ctx, cancel := createContextFromTimeout(timeout)
 	defer cancel()
@@ -29,7 +29,7 @@ func syncAndStopNode(interruptCh <-chan struct{}, nodeManager common.NodeManager
 	doneSync := make(chan struct{})
 	errSync := make(chan error)
 	go func() {
-		if err := nodeManager.EnsureSync(ctx); err != nil {
+		if err := statusNode.EnsureSync(ctx); err != nil {
 			errSync <- err
 		}
 		close(doneSync)
@@ -37,7 +37,7 @@ func syncAndStopNode(interruptCh <-chan struct{}, nodeManager common.NodeManager
 
 	select {
 	case err := <-errSync:
-		log.Printf("syncAndStopNode: failed to sync the chain: %v", err)
+		logger.Error("syncAndStopNode: failed to sync the chain", "error", err)
 		exitCode = 1
 	case <-doneSync:
 	case <-interruptCh:
@@ -46,8 +46,8 @@ func syncAndStopNode(interruptCh <-chan struct{}, nodeManager common.NodeManager
 		return -1
 	}
 
-	if err := nodeManager.StopNode(); err != nil {
-		log.Printf("syncAndStopNode: failed to stop the node: %v", err)
+	if err := statusNode.Stop(); err != nil {
+		logger.Error("syncAndStopNode: failed to stop the node", "error", err)
 		return 1
 	}
 	return

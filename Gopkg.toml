@@ -1,8 +1,10 @@
-ignored = ["github.com/ethereum/go-ethereum/whisper/notifications"]
+# These packages are introduced by patching go-ethereum, so there isn't any point in forcing dep to find them.
+ignored = [ "github.com/ethereum/go-ethereum/ethapi" ]
 
 [prune]
   unused-packages = true
   go-tests = true
+  non-go = true
 
   [[prune.project]]
     name = "github.com/karalabe/hid"
@@ -11,8 +13,9 @@ ignored = ["github.com/ethereum/go-ethereum/whisper/notifications"]
 
   [[prune.project]]
     name = "github.com/ethereum/go-ethereum"
-    non-go = false
     unused-packages = false
+    non-go = false
+
 
 # * * * * * constrained `status-go` dependencies * * * * *
 # (for the full dependency list see `Gopkg.lock`)
@@ -24,11 +27,12 @@ ignored = ["github.com/ethereum/go-ethereum/whisper/notifications"]
 
 [[constraint]]
   name = "github.com/ethereum/go-ethereum"
-  branch = "release/1.7"
+  version = "v1.8.5"
 
 [[constraint]]
-  name = "github.com/prometheus/client_golang"
-  version = "0.8.0"
+  # used only to embed web3js code with particular version
+  name = "github.com/status-im/go-web3js"
+  version = "0.20.1"
 
 # * * * * * `go-ethereum` dependencies * * * * *
 # Pinned down SHAs from `go-ethereum/vendor/vendor.json`
@@ -130,4 +134,12 @@ ignored = ["github.com/ethereum/go-ethereum/whisper/notifications"]
 
 [[override]]
   name = "github.com/syndtr/goleveldb"
-  revision = "b89cc31ef7977104127d34c1bd31ebd1a9db2199"
+  revision = "169b1b37be738edb2813dab48c97a549bcf99bb5"
+
+[[constraint]]
+  branch = "master"
+  name = "github.com/vishvananda/netlink"
+
+[[constraint]]
+  name = "github.com/beevik/ntp"
+  version = "0.2.0"

@@ -1,4 +1,4 @@
-.PHONY: statusgo all test xgo clean help
+.PHONY: statusgo statusd-prune all test xgo clean help
 .PHONY: statusgo-android statusgo-ios
 
 help: ##@other Show this help
@@ -9,17 +9,49 @@ ifndef GOPATH
 	For more information about the GOPATH environment variable, see https://golang.org/doc/code.html#GOPATH)
 endif
 
+
+EXPECTED_PATH=$(shell go env GOPATH)/src/github.com/status-im/status-go
+ifneq ($(CURDIR),$(EXPECTED_PATH))
+define NOT_IN_GOPATH_ERROR
+
+Current dir is $(CURDIR), which seems to be different from your GOPATH.
+Please, build status-go from GOPATH for proper build.
+  GOPATH       = $(shell go env GOPATH) 
+  Current dir  = $(CURDIR) 
+  Expected dir = $(EXPECTED_PATH))
+See https://golang.org/doc/code.html#GOPATH for more info
+
+endef
+$(error $(NOT_IN_GOPATH_ERROR))
+endif
+
 CGO_CFLAGS=-I/$(JAVA_HOME)/include -I/$(JAVA_HOME)/include/darwin
-BUILD_TAGS =
-GOBIN = build/bin
+GOBIN=$(dir $(realpath $(firstword $(MAKEFILE_LIST))))build/bin
+GIT_COMMIT := $(shell git rev-parse --short HEAD)
+
+BUILD_FLAGS ?= $(shell echo "-ldflags '-X main.buildStamp=`date -u '+%Y-%m-%d.%H:%M:%S'` -X github.com/status-im/status-go/params.VersionMeta=$(GIT_COMMIT)'")
+
 GO ?= latest
-XGOVERSION ?= 1.9.2
+XGOVERSION ?= 1.10.x
 XGOIMAGE = statusteam/xgo:$(XGOVERSION)
 XGOIMAGEIOSSIM = statusteam/xgo-ios-simulator:$(XGOVERSION)
 
-DOCKER_IMAGE_NAME ?= status-go
+networkid ?= StatusChain
+gotest_extraflags =
 
-UNIT_TEST_PACKAGES := $(shell go list ./...  | grep -v /vendor | grep -v /t/e2e | grep -v /cmd | grep -v /lib)
+DOCKER_IMAGE_NAME ?= statusteam/status-go
+BOOTNODE_IMAGE_NAME ?= statusteam/bootnode
+STATUSD_PRUNE_IMAGE_NAME ?= statusteam/statusd-prune
+
+DOCKER_TEST_WORKDIR = /go/src/github.com/status-im/status-go/
+DOCKER_TEST_IMAGE = golang:1.10
+
+UNIT_TEST_PACKAGES := $(shell go list ./...  | \
+	grep -v /vendor | \
+	grep -v /t/e2e | \
+	grep -v /t/destructive | \
+	grep -v /t/benchmarks | \
+	grep -v /lib)
 
 # This is a code for automatic help generator.
 # It supports ANSI colors and categories.
@@ -31,7 +63,7 @@ YELLOW := $(shell echo "\e[33m")
 RESET  := $(shell echo "\e[0m")
 HELP_FUN = \
 		   %help; \
-		   while(<>) { push @{$$help{$$2 // 'options'}}, [$$1, $$3] if /^([a-zA-Z\-]+)\s*:.*\#\#(?:@([a-zA-Z\-]+))?\s(.*)$$/ }; \
+		   while(<>) { push @{$$help{$$2 // 'options'}}, [$$1, $$3] if /^([a-zA-Z0-9\-]+)\s*:.*\#\#(?:@([a-zA-Z\-]+))?\s(.*)$$/ }; \
 		   print "Usage: make [target]\n\n"; \
 		   for (sort keys %help) { \
 			   print "${WHITE}$$_:${RESET}\n"; \
@@ -43,25 +75,50 @@ HELP_FUN = \
 		   }
 
 statusgo: ##@build Build status-go as statusd server
-	go build -i -o $(GOBIN)/statusd -v -tags '$(BUILD_TAGS)' $(shell _assets/build/testnet-flags.sh) ./cmd/statusd
+	go build -i -o $(GOBIN)/statusd -v -tags '$(BUILD_TAGS)' $(BUILD_FLAGS) ./cmd/statusd
 	@echo "Compilation done."
 	@echo "Run \"build/bin/statusd -h\" to view available commands."
+
+statusd-prune: ##@statusd-prune Build statusd-prune
+	go build -o $(GOBIN)/statusd-prune -v ./cmd/statusd-prune
+	@echo "Compilation done."
+	@echo "Run \"build/bin/statusd-prune -h\" to view available commands."
+
+statusd-prune-docker-image: ##@statusd-prune Build statusd-prune docker image
+	@echo "Building docker image..."
+	docker build --file _assets/build/Dockerfile-prune . -t $(STATUSD_PRUNE_IMAGE_NAME):latest
+
+bootnode: ##@build Build discovery v5 bootnode using status-go deps
+	go build -i -o $(GOBIN)/bootnode -v -tags '$(BUILD_TAGS)' $(BUILD_FLAGS) ./cmd/bootnode/
+	@echo "Compilation done."
 
 statusgo-cross: statusgo-android statusgo-ios
 	@echo "Full cross compilation done."
 	@ls -ld $(GOBIN)/statusgo-*
 
+statusgo-linux: xgo ##@cross-compile Build status-go for Linux
+	./_assets/patches/patcher -b . -p geth-xgo
+	$(GOPATH)/bin/xgo --image $(XGOIMAGE) --go=$(GO) -out statusgo --dest=$(GOBIN) --targets=linux/amd64 -v -tags '$(BUILD_TAGS)' $(BUILD_FLAGS) ./cmd/statusd
+	./_assets/patches/patcher -b . -p geth-xgo -r
+	@echo "Android cross compilation done."
+
 statusgo-android: xgo ##@cross-compile Build status-go for Android
-	$(GOPATH)/bin/xgo --image $(XGOIMAGE) --go=$(GO) -out statusgo --dest=$(GOBIN) --targets=android-16/aar -v -tags '$(BUILD_TAGS)' $(shell _assets/build/testnet-flags.sh) ./lib
+	./_assets/patches/patcher -b . -p geth-xgo
+	$(GOPATH)/bin/xgo --image $(XGOIMAGE) --go=$(GO) -out statusgo --dest=$(GOBIN) --targets=android-16/aar -v -tags '$(BUILD_TAGS)' $(BUILD_FLAGS) ./lib
+	./_assets/patches/patcher -b . -p geth-xgo -r
 	@echo "Android cross compilation done."
 
 statusgo-ios: xgo	##@cross-compile Build status-go for iOS
-	$(GOPATH)/bin/xgo --image $(XGOIMAGE) --go=$(GO) -out statusgo --dest=$(GOBIN) --targets=ios-9.3/framework -v -tags '$(BUILD_TAGS)' $(shell _assets/build/testnet-flags.sh) ./lib
+	./_assets/patches/patcher -b . -p geth-xgo
+	$(GOPATH)/bin/xgo --image $(XGOIMAGE) --go=$(GO) -out statusgo --dest=$(GOBIN) --targets=ios-9.3/framework -v -tags '$(BUILD_TAGS)' $(BUILD_FLAGS) ./lib
+	./_assets/patches/patcher -b . -p geth-xgo -r
 	@echo "iOS framework cross compilation done."
 
 statusgo-ios-simulator: xgo	##@cross-compile Build status-go for iOS Simulator
 	@docker pull $(XGOIMAGEIOSSIM)
-	$(GOPATH)/bin/xgo --image $(XGOIMAGEIOSSIM) --go=$(GO) -out statusgo --dest=$(GOBIN) --targets=ios-9.3/framework -v -tags '$(BUILD_TAGS)' $(shell _assets/build/testnet-flags.sh) ./lib
+	./_assets/patches/patcher -b . -p geth-xgo
+	$(GOPATH)/bin/xgo --image $(XGOIMAGEIOSSIM) --go=$(GO) -out statusgo --dest=$(GOBIN) --targets=ios-9.3/framework -v -tags '$(BUILD_TAGS)' $(BUILD_FLAGS) ./lib
+	./_assets/patches/patcher -b . -p geth-xgo -r
 	@echo "iOS framework cross compilation done."
 
 statusgo-library: ##@cross-compile Build status-go as static library for current platform
@@ -72,7 +129,11 @@ statusgo-library: ##@cross-compile Build status-go as static library for current
 
 docker-image: ##@docker Build docker image (use DOCKER_IMAGE_NAME to set the image name)
 	@echo "Building docker image..."
-	docker build --file _assets/build/Dockerfile --build-arg "build_tags=$(BUILD_TAGS)" . -t $(DOCKER_IMAGE_NAME):latest
+	docker build --file _assets/build/Dockerfile --build-arg "build_tags=$(BUILD_TAGS)" --build-arg "build_flags=$(BUILD_FLAGS)" . -t $(DOCKER_IMAGE_NAME):latest
+
+bootnode-image:
+	@echo "Building docker image for bootnode..."
+	docker build --file _assets/build/Dockerfile-bootnode . -t $(BOOTNODE_IMAGE_NAME):latest
 
 docker-image-tag: ##@docker Tag DOCKER_IMAGE_NAME:latest with a tag following pattern $GIT_SHA[:8]-$BUILD_TAGS
 	@echo "Tagging docker image..."
@@ -87,68 +148,63 @@ xgo:
 	docker pull $(XGOIMAGE)
 	go get github.com/karalabe/xgo
 
-statusgo-mainnet:
-	go build -i -o $(GOBIN)/statusgo -v $(shell _assets/build/mainnet-flags.sh) ./cmd/statusd
-	@echo "status go compilation done (mainnet)."
-	@echo "Run \"build/bin/statusgo\" to view available commands"
-
-statusgo-android-mainnet: xgo
-	$(GOPATH)/bin/xgo --image $(XGOIMAGE) --go=$(GO) -out statusgo --dest=$(GOBIN) --targets=android-16/aar -v $(shell _assets/build/mainnet-flags.sh) ./lib
-	@echo "Android cross compilation done (mainnet)."
-
-statusgo-ios-mainnet: xgo
-	$(GOPATH)/bin/xgo --image $(XGOIMAGE) --go=$(GO) -out statusgo --dest=$(GOBIN) --targets=ios-9.3/framework -v $(shell _assets/build/mainnet-flags.sh) ./lib
-	@echo "iOS framework cross compilation done (mainnet)."
-
-statusgo-ios-simulator-mainnet: xgo
-	$(GOPATH)/bin/xgo --image $(XGOIMAGEIOSSIM) --go=$(GO) -out statusgo --dest=$(GOBIN) --targets=ios-9.3/framework -v $(shell _assets/build/mainnet-flags.sh) ./lib
-	@echo "iOS framework cross compilation done (mainnet)."
+setup: dep-install lint-install mock-install ##@other Prepare project for first build
 
 generate: ##@other Regenerate assets and other auto-generated stuff
-	cp ./node_modules/web3/dist/web3.js ./static/scripts/web3.js
 	go generate ./static
-	rm ./static/scripts/web3.js
 
 mock-install: ##@other Install mocking tools
 	go get -u github.com/golang/mock/mockgen
 
 mock: ##@other Regenerate mocks
-	mockgen -source=geth/common/types.go -destination=geth/common/types_mock.go -package=common
-	mockgen -source=geth/mailservice/mailservice.go -destination=geth/mailservice/mailservice_mock.go -package=mailservice
-	mockgen -source=geth/common/notification.go -destination=geth/common/notification_mock.go -package=common -imports fcm=github.com/NaySoftware/go-fcm
-	mockgen -source=geth/notification/fcm/client.go -destination=geth/notification/fcm/client_mock.go -package=fcm -imports fcm=github.com/NaySoftware/go-fcm
-	mockgen -source=geth/transactions/fake/txservice.go -destination=geth/transactions/fake/mock.go -package=fake
+	mockgen -package=fcm          -destination=notifications/push/fcm/client_mock.go -source=notifications/push/fcm/client.go
+	mockgen -package=fake         -destination=transactions/fake/mock.go             -source=transactions/fake/txservice.go
+	mockgen -package=account      -destination=account/accounts_mock.go              -source=account/accounts.go
+	mockgen -package=jail         -destination=jail/cell_mock.go                     -source=jail/cell.go
+	mockgen -package=status       -destination=services/status/account_mock.go            -source=services/status/service.go
+
+docker-test: ##@tests Run tests in a docker container with golang.
+	docker run --privileged --rm -it -v "$(shell pwd):$(DOCKER_TEST_WORKDIR)" -w "$(DOCKER_TEST_WORKDIR)" $(DOCKER_TEST_IMAGE) go test ${ARGS}
 
 test: test-unit-coverage ##@tests Run basic, short tests during development
 
 test-unit: ##@tests Run unit and integration tests
-	go test $(UNIT_TEST_PACKAGES)
+	go test -v $(UNIT_TEST_PACKAGES) $(gotest_extraflags)
 
 test-unit-coverage: ##@tests Run unit and integration tests with coverage
-	go test -coverpkg= $(UNIT_TEST_PACKAGES)
+	go test -coverpkg= $(UNIT_TEST_PACKAGES) $(gotest_extraflags)
+
+test-unit-race: gotest_extraflags=-race
+test-unit-race: test-unit ##@tests Run unit and integration tests with -race flag
 
 test-e2e: ##@tests Run e2e tests
 	# order: reliability then alphabetical
 	# TODO(tiabc): make a single command out of them adding `-p 1` flag.
-	go test -timeout 5m ./t/e2e/accounts/... -network=$(networkid)
-	go test -timeout 5m ./t/e2e/api/... -network=$(networkid)
-	go test -timeout 5m ./t/e2e/node/... -network=$(networkid)
-	go test -timeout 50m ./t/e2e/jail/... -network=$(networkid)
-	go test -timeout 20m ./t/e2e/rpc/... -network=$(networkid)
-	go test -timeout 20m ./t/e2e/whisper/... -network=$(networkid)
-	go test -timeout 10m ./t/e2e/transactions/... -network=$(networkid)
+	go test -timeout 5m ./t/e2e/accounts/... -network=$(networkid) $(gotest_extraflags)
+	go test -timeout 5m ./t/e2e/api/... -network=$(networkid) $(gotest_extraflags)
+	go test -timeout 5m ./t/e2e/node/... -network=$(networkid) $(gotest_extraflags)
+	go test -timeout 50m ./t/e2e/jail/... -network=$(networkid) $(gotest_extraflags)
+	go test -timeout 20m ./t/e2e/rpc/... -network=$(networkid) $(gotest_extraflags)
+	go test -timeout 20m ./t/e2e/whisper/... -network=$(networkid) $(gotest_extraflags)
+	go test -timeout 10m ./t/e2e/transactions/... -network=$(networkid) $(gotest_extraflags)
+	go test -timeout 10m ./t/e2e/services/... -network=$(networkid) $(gotest_extraflags)
 	# e2e_test tag is required to include some files from ./lib without _test suffix
-	go test -timeout 40m -tags e2e_test ./lib -network=$(networkid)
+	go test -timeout 40m -tags e2e_test ./lib -network=$(networkid) $(gotest_extraflags)
+
+test-e2e-race: gotest_extraflags=-race
+test-e2e-race: test-e2e ##@tests Run e2e tests with -race flag
 
 lint-install:
-	go get -u github.com/alecthomas/gometalinter
-	gometalinter --install
+	go get -u github.com/client9/misspell/cmd/misspell
+	@# The following installs a specific version of golangci-lint, which is appropriate for a CI server to avoid different results from build to build
+	curl -sfL https://install.goreleaser.com/github.com/golangci/golangci-lint.sh | bash -s -- -b $(GOPATH)/bin v1.6.1
 
 lint:
 	@echo "lint"
-	@gometalinter ./...
+	@golangci-lint run ./...
+	@find . -type f -not -path "./.ethereumtest/*" -not -path "./vendor/*" -not -path "./extkeys/mnemonic.go" -not -path "./extkeys/mnemonic_vectors.json" -print0 | xargs -0 misspell
 
-ci: lint mock test-unit test-e2e ##@tests Run all linters and tests at once
+ci: lint mock dep-ensure test-unit test-e2e ##@tests Run all linters and tests at once
 
 clean: ##@other Cleanup
 	rm -fr build/bin/*
@@ -167,6 +223,9 @@ dep-ensure: ##@dependencies Dep ensure and apply all patches
 
 dep-install: ##@dependencies Install vendoring tool
 	go get -u github.com/golang/dep/cmd/dep
+
+update-geth: ##@dependencies Update geth (use GETH_BRANCH to optionally set the geth branch name)
+	./_assets/ci/update-geth.sh $(GETH_BRANCH)
 
 patch: ##@patching Revert and apply all patches
 	./_assets/patches/patcher

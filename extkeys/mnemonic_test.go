@@ -1,12 +1,10 @@
-package extkeys_test
+package extkeys
 
 import (
 	"encoding/json"
 	"fmt"
 	"os"
 	"testing"
-
-	"github.com/status-im/status-go/extkeys"
 )
 
 type VectorsFile struct {
@@ -15,19 +13,51 @@ type VectorsFile struct {
 }
 
 type Vector struct {
-	language, salt, password, input, mnemonic, seed, xprv string
+	language, password, input, mnemonic, seed, xprv string
+}
+
+func TestNewMnemonic(t *testing.T) {
+	m1 := NewMnemonic()
+	if m1.salt != defaultSalt {
+		t.Errorf("expected default salt, got: %q", m1.salt)
+	}
+}
+
+func TestMnemonic_WordList(t *testing.T) {
+	m := NewMnemonic()
+	_, err := m.WordList(EnglishLanguage)
+	if err != nil {
+		t.Errorf("expected WordList to return WordList without errors, got: %s", err)
+	}
+
+	indexes := []Language{-1, Language(len(m.wordLists))}
+	for _, index := range indexes {
+		_, err := m.WordList(index)
+		if err == nil {
+			t.Errorf("expected WordList to return an error with index %d", index)
+		}
+	}
 }
 
 // TestMnemonicPhrase
 func TestMnemonicPhrase(t *testing.T) {
 
-	mnemonic := extkeys.NewMnemonic(extkeys.Salt)
+	mnemonic := NewMnemonic()
+
+	// test strength validation
+	strengths := []entropyStrength{127, 129, 257}
+	for _, s := range strengths {
+		_, err := mnemonic.MnemonicPhrase(s, EnglishLanguage)
+		if err != ErrInvalidEntropyStrength {
+			t.Errorf("Entropy strength '%d' should be invalid", s)
+		}
+	}
 
 	// test mnemonic generation
 	t.Log("Test mnemonic generation:")
 	for _, language := range mnemonic.AvailableLanguages() {
-		phrase, err := mnemonic.MnemonicPhrase(128, language)
-		t.Logf("Mnemonic (%s): %s", extkeys.Languages[language], phrase)
+		phrase, err := mnemonic.MnemonicPhrase(EntropyStrength128, language)
+		t.Logf("Mnemonic (%s): %s", Languages[language], phrase)
 
 		if err != nil {
 			t.Errorf("Test failed: could not create seed: %s", err)
@@ -47,14 +77,23 @@ func TestMnemonicPhrase(t *testing.T) {
 	t.Log("Test against pre-computed seed vectors:")
 	stats := map[string]int{}
 	for _, vector := range vectorsFile.vectors {
-		stats[vector.language] += 1
-		mnemonic := extkeys.NewMnemonic(vector.salt)
+		stats[vector.language]++
+		mnemonic := NewMnemonic()
 		seed := mnemonic.MnemonicSeed(vector.mnemonic, vector.password)
 		if fmt.Sprintf("%x", seed) != vector.seed {
 			t.Errorf("Test failed (%s): incorrect seed (%x) generated (expected: %s)", vector.language, seed, vector.seed)
 			return
 		}
 		//t.Logf("Test passed: correct seed (%x) generated (expected: %s)", seed, vector.seed)
+
+		rootKey, err := NewMaster(seed)
+		if err != nil {
+			t.Error(err)
+		}
+
+		if rootKey.String() != vector.xprv {
+			t.Errorf("Test failed (%s): incorrect xprv (%s) generated (expected: %s)", vector.language, rootKey, vector.xprv)
+		}
 	}
 	for language, count := range stats {
 		t.Logf("[%s]: %d tests completed", language, count)
@@ -75,7 +114,7 @@ func LoadVectorsFile(path string) (*VectorsFile, error) {
 	// load data into Vector structs
 	for language, data := range vectorsFile.Data {
 		for _, item := range data {
-			vectorsFile.vectors = append(vectorsFile.vectors, &Vector{language, item[0], item[1], item[2], item[3], item[4], item[5]})
+			vectorsFile.vectors = append(vectorsFile.vectors, &Vector{language, item[0], item[1], item[2], item[3], item[4]})
 		}
 	}
 
@@ -83,6 +122,6 @@ func LoadVectorsFile(path string) (*VectorsFile, error) {
 }
 
 func (v *Vector) String() string {
-	return fmt.Sprintf("{salt: %s, password: %s, input: %s, mnemonic: %s, seed: %s, xprv: %s}",
-		v.salt, v.password, v.input, v.mnemonic, v.seed, v.xprv)
+	return fmt.Sprintf("{password: %s, input: %s, mnemonic: %s, seed: %s, xprv: %s}",
+		v.password, v.input, v.mnemonic, v.seed, v.xprv)
 }

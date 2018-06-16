@@ -2,34 +2,35 @@ notifications:
   email: false
 language: go
 go:
-- 1.9.x
+- 1.10.x
 sudo: false
 dist: trusty
-install:
-- go get golang.org/x/tools/cmd/cover
-- make mock-install
-- make lint-install
-- make dep-install
+install: make setup
 jobs:
   include:
-  - stage: Lint
-    script: make lint
-  - stage: Vendor Check
-    script: make vendor-check
-  - stage: Test unit and integration
-    script: make test-unit-coverage
-  - stage: Test e2e on private network
-    script: make test-e2e
-  - stage: Test e2e on public network
-    # disable running this stage for PRs as they do not have access
-    # to the ACCOUNT_PASSWORD env variable needed to unlock the public testnet accounts.
-    # using fork == false may be preferred as it would allow PRs from the origin
-    # to still run, but currently does not work due to a bug
-    if: type != pull_request
+  - stage: Lint & Vendor Check
+    sudo: required
+    before_script: make dep-ensure
     script:
-      # sync the chain first; it will time out after 20 minutes; Rinkeby is networkid=4
+      - make lint
+      - make vendor-check
+  - stage: Test unit and integration
+    script:
+      - make test-unit-race
+      - make test-unit-coverage
+  - stage: Test e2e on private network
+    script:
+      - make test-e2e-race
+  - stage: Test e2e on public network
+    # Disable running this stage for pushes as it's not needed to run it twice.
+    # We only want to check if tests on public testnet pass in a merge build.
+    # Also, disable for fork builds as they do not have access to
+    # ACCOUNT_PASSWORD environment variable anyway.
+    if: ((type != push) OR (branch = "develop")) AND (fork = false)
+    script:
+      # Sync the chain first. It will time out after 30 minutes. Used network: Rinkeby.
       - make statusgo
-      - ./build/bin/statusd -datadir .ethereumtest/Rinkeby -les -networkid=4 -sync-and-exit=20 -log WARN -standalone=false -discovery=false
+      - ./build/bin/statusd -datadir=.ethereumtest/Rinkeby -les -networkid=4 -sync-and-exit=45 -log=WARN -standalone=false -discovery=false -ntp=false
       - make test-e2e networkid=4
 cache:
   directories:

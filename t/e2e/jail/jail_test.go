@@ -10,17 +10,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/status-im/status-go/geth/common"
-	"github.com/status-im/status-go/geth/jail"
-	"github.com/status-im/status-go/geth/node"
-	"github.com/status-im/status-go/geth/signal"
+	"github.com/status-im/status-go/jail"
+	"github.com/status-im/status-go/node"
+	"github.com/status-im/status-go/signal"
 	"github.com/status-im/status-go/static"
-	e2e "github.com/status-im/status-go/t/e2e"
+	"github.com/status-im/status-go/t/e2e"
 	"github.com/stretchr/testify/suite"
 )
 
 const (
-	testChatID = "testChat"
+	testChatID  = "testChat"
+	successJSON = `{"result":true}`
 )
 
 var (
@@ -32,13 +32,13 @@ func TestJailTestSuite(t *testing.T) {
 }
 
 type JailTestSuite struct {
-	e2e.NodeManagerTestSuite
-	Jail common.JailManager
+	e2e.StatusNodeTestSuite
+	Jail jail.Manager
 }
 
 func (s *JailTestSuite) SetupTest() {
-	s.NodeManager = node.NewNodeManager()
-	s.Jail = jail.New(s.NodeManager)
+	s.StatusNode = node.New()
+	s.Jail = jail.New(s.StatusNode)
 }
 
 func (s *JailTestSuite) TearDownTest() {
@@ -99,7 +99,6 @@ func (s *JailTestSuite) TestCreateAndInitCell() {
 	// Reinitialization preserves the JS environment, so the 'test' variable exists
 	// even though we didn't initialize it here (in the second room).
 	response = s.Jail.CreateAndInitCell("newChat2", "a")
-	expectedResponse = `{"result":2}`
 	s.Equal(expectedResponse, response)
 
 	// But this variable doesn't leak into other rooms.
@@ -122,8 +121,8 @@ func (s *JailTestSuite) TestFunctionCall() {
 	s.Equal(expectedError, response)
 
 	// call extraFunc()
-	response = s.Jail.Call(testChatID, `["commands", "testCommand"]`, `{"val":12}`)
-	expectedResponse := `{"result":144}`
+	response = s.Jail.Call(testChatID, `["commands", "testCommand"]`, `{"val":11}`)
+	expectedResponse := `{"result":121}`
 	s.Equal(expectedResponse, response)
 }
 
@@ -137,7 +136,7 @@ func (s *JailTestSuite) TestFunctionCallTrue() {
 
 	// call extraFunc()
 	response := s.Jail.Call(testChatID, `["commands", "testCommandTrue"]`, `{"val":12}`)
-	expectedResponse := `{"result":true}`
+	expectedResponse := successJSON
 	s.Equal(expectedResponse, response)
 }
 
@@ -161,7 +160,7 @@ func (s *JailTestSuite) TestEventSignal() {
 		unmarshalErr := json.Unmarshal([]byte(jsonEvent), &envelope)
 		s.NoError(unmarshalErr)
 
-		if envelope.Type == jail.EventSignal {
+		if envelope.Type == signal.EventJailSignal {
 			event := envelope.Event.(map[string]interface{})
 			chatID, ok := event["chat_id"].(string)
 			s.True(ok, "chat id is required, but not found")
@@ -192,10 +191,10 @@ func (s *JailTestSuite) TestEventSignal() {
 	responseValue, err := cell.Get("responseValue")
 	s.NoError(err, "cannot obtain result of localStorage.set()")
 
-	response, err := responseValue.ToString()
+	response, err := responseValue.Value().ToString()
 	s.NoError(err, "cannot parse result")
 
-	expectedResponse := `{"result":true}`
+	expectedResponse := successJSON
 	s.Equal(expectedResponse, response)
 }
 
@@ -235,7 +234,7 @@ func (s *JailTestSuite) TestSendSyncResponseOrder() {
 		go func(i int) {
 			defer wg.Done()
 			res := s.Jail.Call(testChatID, `["commands", "testCommand"]`, fmt.Sprintf(`{"val":%d}`, i))
-			if !strings.Contains(string(res), fmt.Sprintf("result\":%d", i*i)) {
+			if !strings.Contains(res, fmt.Sprintf("result\":%d", i*i)) {
 				errCh <- fmt.Errorf("result should be '%d', got %s", i*i, res)
 			}
 		}(i)
@@ -244,7 +243,7 @@ func (s *JailTestSuite) TestSendSyncResponseOrder() {
 		go func(i int) {
 			defer wg.Done()
 			res := s.Jail.Call(testChatID, `["commands", "calculateGasPrice"]`, fmt.Sprintf(`%d`, i))
-			if strings.Contains(string(res), "error") {
+			if strings.Contains(res, "error") {
 				errCh <- fmt.Errorf("result should not contain 'error', got %s", res)
 			}
 		}(i)
